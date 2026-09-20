@@ -1,0 +1,6 @@
+{
+  "name": "DoseSure – Verified Medication Adherence Platform",
+  "description": "An intelligent medication adherence platform connecting patients and care workers through verified dose monitoring.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
