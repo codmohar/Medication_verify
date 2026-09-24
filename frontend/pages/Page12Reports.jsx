@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Patient, ActivePage, CareWorker } from '../types';
 import { AdherenceChart } from '../components/AdherenceChart';
 import { 
   BarChart3, 
@@ -14,18 +13,12 @@ import {
   FileSpreadsheet
 } from 'lucide-react';
 
-interface Page12ReportsProps {
-  patients: Patient[];
-  careWorker: CareWorker;
-  onNavigate: (page: ActivePage) => void;
-}
-
-export const Page12Reports: React.FC<Page12ReportsProps> = ({
+export const Page12Reports = ({
   patients,
   careWorker,
   onNavigate,
 }) => {
-  const [reportPeriod, setReportPeriod] = useState<'Q3_2026' | 'SEP_2026' | 'ALL'>('SEP_2026');
+  const [reportPeriod, setReportPeriod] = useState('SEP_2026');
 
   // Compute stats
   const total = patients.length;

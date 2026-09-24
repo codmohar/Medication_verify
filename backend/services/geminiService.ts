@@ -30,21 +30,161 @@ export function cleanBase64Data(raw: string): string {
 }
 
 async function callGeminiGenerate(ai: GoogleGenAI, config: any): Promise<any> {
-  const models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  const models = ['gemini-3.5-flash-lite', 'gemini-3.5-flash', 'gemini-3.6-flash'];
   let lastError: any = null;
 
   for (const model of models) {
-    try {
-      return await ai.models.generateContent({
-        ...config,
-        model,
-      });
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`Model ${model} call failed (${err?.message || err}), trying next fallback model...`);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await ai.models.generateContent({
+          ...config,
+          model,
+        });
+      } catch (err: any) {
+        lastError = err;
+        const msg = String(err?.message || err);
+        if (msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('high demand')) {
+          console.warn(`Model ${model} returned 503/high demand (attempt ${attempt + 1}), retrying in 1.2s...`);
+          await new Promise(r => setTimeout(r, 1200));
+          continue;
+        }
+        break; // break to next fallback model
+      }
     }
+    console.warn(`Model ${model} call failed (${lastError?.message || lastError}), trying next fallback model...`);
   }
   throw lastError;
+}
+
+export interface PillAuditResult {
+  pill_detected: boolean;
+  confidence: number;
+  visual_evidence: 'CLEARLY_VISIBLE_PILL' | 'EMPTY_PINCH_AIR' | 'EMPTY_PALM' | 'UNCLEAR_OR_NO_HAND';
+  pill_description: string;
+  detailed_inspection: string;
+}
+
+/**
+ * STAGE 1: Isolated Gate 1 Pill Audit
+ * Sends ONLY the presentation frames (indices 0 and 1) to Gemini.
+ * Decoupled from the rest of the video to completely prevent sequence-completion hallucinations.
+ */
+export async function verifyPillPresenceInHand(
+  presentationFrames: Array<{ imageBase64: string; timestamp?: string }>,
+  expectedMed: string
+): Promise<PillAuditResult> {
+  const ai = getGeminiClient();
+  if (!ai || !presentationFrames || presentationFrames.length === 0) {
+    return {
+      pill_detected: false,
+      confidence: 0.5,
+      visual_evidence: 'UNCLEAR_OR_NO_HAND',
+      pill_description: 'None',
+      detailed_inspection: 'No Gemini client or presentation frames available',
+    };
+  }
+
+  const parts: any[] = [
+    {
+      text: `CLINICAL VERIFICATION PROTOCOL - GATE 1: MEDICINE IN HAND AUDIT.
+You are a forensic Medical Intake Adherence Auditor.
+Examine ONLY these initial presentation frames of the patient's hand.
+
+CRITICAL OBJECTIVE & USER PRINCIPLE:
+Whatever physical object, pill, tablet, capsule, or item is held in the pinch of the fingers or in the palm before taking the hand to the mouth WILL BE TAKEN AS MEDICINE.
+Do NOT reject an item for being a different color, shape, or test item. If the patient is visibly holding any physical object/pill between their fingertips or resting on their palm, IT IS ACCEPTED AS THE MEDICINE.
+
+STRICT DECISION RULES:
+1. POSITIVE VERIFICATION (MEDICINE IN HAND):
+   If the patient is visibly holding any physical object, pill, tablet, capsule, or test item between their fingers (in pinch) or in their palm:
+   You MUST set: is_pill_physically_visible = true, visual_evidence = 'CLEARLY_VISIBLE_PILL', pill_description = description of whatever is held in the hand.
+
+2. EMPTY PINCH / PINCHING AIR (NEGATIVE):
+   If the patient's fingers are held in a pinch or C-shape but NO object is held between the fingertips (i.e. they are pinching empty air, fingers touching each other with nothing inside, or empty room background visible through the gap):
+   THIS IS AN EMPTY HAND.
+   You MUST set: is_pill_physically_visible = false, visual_evidence = 'EMPTY_PINCH_AIR', pill_description = 'None (pinching empty air)'.
+
+3. EMPTY PALM (NEGATIVE):
+   If the patient presents a bare open palm or empty hand with no object resting on it:
+   THIS IS AN EMPTY HAND.
+   You MUST set: is_pill_physically_visible = false, visual_evidence = 'EMPTY_PALM', pill_description = 'None (empty palm)'.`
+    }
+  ];
+
+  for (let i = 0; i < presentationFrames.length; i++) {
+    const cleaned = cleanBase64Data(presentationFrames[i].imageBase64);
+    if (cleaned) {
+      parts.push({
+        text: `[Presentation Frame ${i + 1} at timestamp ${presentationFrames[i].timestamp || '00:02'}]`
+      });
+      parts.push({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: cleaned,
+        }
+      });
+    }
+  }
+
+  try {
+    const response = await callGeminiGenerate(ai, {
+      contents: { parts },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            is_pill_physically_visible: {
+              type: Type.BOOLEAN,
+              description: 'True ONLY if an actual solid pill/tablet/capsule is clearly visible in the hand or fingers. False if empty hand or pinching air.',
+            },
+            visual_evidence: {
+              type: Type.STRING,
+              enum: ['CLEARLY_VISIBLE_PILL', 'EMPTY_PINCH_AIR', 'EMPTY_PALM', 'UNCLEAR_OR_NO_HAND'],
+            },
+            pill_description: {
+              type: Type.STRING,
+              description: 'Visual description of the pill if visible, or statement that hand is empty.',
+            },
+            confidence: {
+              type: Type.NUMBER,
+            },
+            detailed_inspection: {
+              type: Type.STRING,
+              description: 'Detailed forensic observation of the hand and fingers.',
+            },
+          },
+          required: [
+            'is_pill_physically_visible',
+            'visual_evidence',
+            'pill_description',
+            'confidence',
+            'detailed_inspection',
+          ],
+        },
+      },
+    });
+
+    const parsed = JSON.parse(response.text?.trim() || '{}');
+    const pillDetected = parsed.is_pill_physically_visible === true && parsed.visual_evidence === 'CLEARLY_VISIBLE_PILL';
+
+    return {
+      pill_detected: pillDetected,
+      confidence: parsed.confidence || 0.95,
+      visual_evidence: parsed.visual_evidence || (pillDetected ? 'CLEARLY_VISIBLE_PILL' : 'EMPTY_PINCH_AIR'),
+      pill_description: parsed.pill_description || (pillDetected ? expectedMed : 'None (empty hand)'),
+      detailed_inspection: parsed.detailed_inspection || 'Stage 1 Gate 1 audit complete',
+    };
+  } catch (err: any) {
+    console.warn('verifyPillPresenceInHand Gemini call error:', err);
+    return {
+      pill_detected: false,
+      confidence: 0.5,
+      visual_evidence: 'UNCLEAR_OR_NO_HAND',
+      pill_description: 'Error during audit',
+      detailed_inspection: String(err?.message || err),
+    };
+  }
 }
 
 export async function verifyWithGemini(
@@ -61,7 +201,12 @@ export async function verifyWithGemini(
     // If keyframes provided, send them as high-resolution vision items
     if (req.keyFrames && req.keyFrames.length > 0) {
       parts.push({
-        text: `The following is a chronological sequence of ${req.keyFrames.length} keyframes extracted from a clinical medication-taking video for patient ${patientName}. Expected pill: "${expectedMed}".`
+        text: `You are a certified Clinical Video Adherence Inspector.
+Examine this chronological sequence of ${req.keyFrames.length} camera frames of patient ${patientName} taking "${expectedMed}".
+
+CRITICAL OBJECTIVE: You must inspect each frame strictly and objectively. DO NOT assume or imagine that a pill was taken if it is not clearly visible in the hand before the hand moves to the mouth.
+
+CHRONOLOGICAL FRAMES FOR INSPECTION:`
       });
 
       for (let i = 0; i < req.keyFrames.length; i++) {
@@ -69,7 +214,7 @@ export async function verifyWithGemini(
         const cleaned = cleanBase64Data(kf.imageBase64);
         if (cleaned) {
           parts.push({
-            text: `[Frame ${i + 1} at timestamp ${kf.timestamp || `00:0${i * 2}`}] Label hint: ${kf.label || 'Step'}`
+            text: `[Frame ${i + 1} at timestamp ${kf.timestamp || `00:0${i * 2}`}]`
           });
           parts.push({
             inlineData: {
@@ -79,10 +224,8 @@ export async function verifyWithGemini(
           });
         }
       }
-    }
-
-    // If video base64 is provided and valid, also attach video
-    if (req.videoBase64) {
+    } else if (req.videoBase64) {
+      // Only attach raw video if discrete keyframes were not provided
       const cleanVideo = cleanBase64Data(req.videoBase64);
       if (cleanVideo.length > 5000) {
         const rawMime = (req.mimeType || 'video/webm').split(';')[0];
@@ -99,43 +242,44 @@ export async function verifyWithGemini(
       return null;
     }
 
-    const clinicalPrompt = `You are a certified Clinical Computer Vision and AI Adherence Verification Model.
-Your mission is to perform clinical-grade temporal verification of whether the patient took their prescribed medication.
-Target prescribed medication: "${expectedMed}".
+    const clinicalPrompt = `CLINICAL VERIFICATION PROTOCOL (FRAME-BY-FRAME ZERO-TOLERANCE RULES):
 
-VERIFICATION PROTOCOL:
-1. MEDICINE/PILL IN HAND (Step 1: medicine_detected)
-   - Inspect the patient's hand / fingers at the start very closely.
-   - EXACT CLINICAL GROUNDING: EMPTY HAND PINCH VS. MEDICINE BETWEEN TWO FINGERS:
-     * [NEGATIVE REFERENCE: EMPTY HAND PINCH]:
-       If the patient holds their hand in a pinch or C-curve (e.g. index finger arched down and thumb extended up toward it) but the space/gap between the two fingertips is EMPTY (showing background, wall, or air through the opening with NO tablet or capsule between them), this is an EMPTY HAND PINCH.
-       In this case, medicine_detected MUST BE FALSE.
-       Do NOT hallucinate or mistake knuckles, skin creases, or fingernails for a pill.
-     * [POSITIVE REFERENCE: MEDICINE BETWEEN 2 FINGERS / IN HAND]:
-       If there is an actual solid oral medication (pill, tablet, capsule, caplet) physically held between the two fingers (between index fingertip and thumb tip/pad) or resting securely in the palm/fingers, then medicine_detected MUST BE TRUE.
-       A visible solid object bridging or held at the fingertips confirms medicine in hand.
-   - Describe visible appearance (e.g. round white tablet, oblong capsule, blister pack extraction).
+GATE 1: MEDICINE IN HAND (Inspect Frame 1 and Frame 2) - MANDATORY:
+- Look at the patient's fingers and hand in Frame 1 and Frame 2.
+- USER PRINCIPLE: Whatever physical object, pill, tablet, capsule, or item is held in the pinch of the fingers or in the hand before taking the hand to the mouth WILL BE TAKEN AS MEDICINE. Do NOT reject an item because of color, shape, or test item appearance.
+- [NEGATIVE REFERENCE - EMPTY HAND / EMPTY PINCH]:
+  If the patient's fingers are held in a pinch or C-shape but the gap between the fingertips is EMPTY (pinching empty air, showing background through the gap with NO object held), or if the hand is an open bare palm with no object:
+  THIS IS AN EMPTY HAND.
+  You MUST set:
+  - "frame_1_and_2_pill_check": { "is_pill_physically_visible": false, "pinching_empty_air_or_empty_hand": true }
+  - "events": { "medicine_detected": false, "medicine_to_mouth": false, "mouth_interaction": false, "hand_empty": false, "water_intake": false }
+  - "status": "MEDICINE_NOT_TAKEN"
+  - "verified": false
+  - "failed_step": "medicine_detected"
+  - "message": "Medication not verified: Hand was empty when presented to camera. No pill or object was held in hand."
 
-2. HAND GESTURE TO MOUTH (Step 2: medicine_to_mouth)
-   - Detect the upward hand/arm trajectory moving from holding position toward the patient's face, lips, and mouth.
-   - CRITICAL OCCLUSION RULE: When a human ingests a small pill (5-12mm), the fingers naturally wrap around it or cup it to place it on the tongue. DO NOT mark this step as false if the pill is occluded by the moving fingers during transit. As long as the hand holding the pill moves up to touch/meet the mouth, medicine_to_mouth is TRUE.
+- [POSITIVE REFERENCE - MEDICINE IN HAND]:
+  If the patient is visibly holding any physical object/pill between their fingertips or resting on their palm, set "is_pill_physically_visible": true, "pinching_empty_air_or_empty_hand": false, and "medicine_detected": true.
 
-3. MOUTH INTERACTION & INGESTION (Step 3: mouth_interaction)
-   - Detect the hand/fingers placing the pill into open/parted lips, touching the mouth, followed by mouth closure or swallow.
-   - If mouth interaction occurs, medicine_to_mouth is logically TRUE.
+GATE 2: HAND GESTURE TO MOUTH (Inspect Frame 3 and Frame 4) - MANDATORY:
+- Hand holding the medicine/object visibly moves upward toward the face and mouth.
+- If hand never moved up to mouth: "medicine_to_mouth": false, failed_step: "medicine_to_mouth".
 
-4. EMPTY OPEN HAND CONFIRMATION (Step 4: hand_empty)
-   - Confirm that after the mouth interaction, the patient opens their palm or turns their hand to show the pill is no longer there.
+GATE 3: MOUTH INGESTION & SWALLOW (Inspect Frame 4 and Frame 5) - MANDATORY:
+- Hand brings the medicine/object into open lips, followed by mouth closure and swallow.
+- If merely touched face without placing into mouth: "mouth_interaction": false, failed_step: "mouth_interaction".
 
-5. WATER INTAKE (Step 5: water_intake - OPTIONAL)
-   - Detect if water cup/glass is brought to mouth. This is strictly optional.
+GATE 4: CLEAN EMPTY HAND RESHOWING (Inspect Frame 5 and Frame 6) - MANDATORY:
+- After mouth ingestion, patient shows their open hand to the camera confirming 0 medication/object remains (the item was fully ingested).
+- Set "hand_empty": true.
 
-DECISION CRITERIA:
-- Status is 'MEDICINE_TAKEN' (verified = true) if Steps 1, 2, 3, and 4 are confirmed.
-- If no pill was visibly held in hand (or if only an empty hand pinch occurred without an actual pill), failed_step = 'medicine_detected'.
-- If the hand never moved to the mouth, failed_step = 'medicine_to_mouth'.
-- If the pill stayed in the palm after withdrawal from mouth, failed_step = 'hand_not_empty'.
-- If visual evidence is insufficient or completely dark, status = 'UNVERIFIED'.`;
+GATE 5: WATER INTAKE (Inspect Frame 5 and Frame 6) - OPTIONAL:
+- If patient drinks water from a glass/bottle, set "water_intake": true, else false. (Water intake is optional and does not invalidate verification).
+
+DECISION RULES:
+- Status is 'MEDICINE_TAKEN' (verified = true) IF AND ONLY IF Gates 1, 2, 3, AND 4 are ALL confirmed.
+- If Gate 1 fails (empty hand / pinching empty air at start): status MUST BE 'MEDICINE_NOT_TAKEN', verified = false, failed_step = 'medicine_detected'.
+- If Gates 1, 2, 3, and 4 are confirmed: status MUST BE 'MEDICINE_TAKEN', verified = true!`;
 
     parts.push({ text: clinicalPrompt });
 
@@ -148,6 +292,28 @@ DECISION CRITERIA:
         responseSchema: {
           type: Type.OBJECT,
           properties: {
+            frame_1_and_2_pill_check: {
+              type: Type.OBJECT,
+              properties: {
+                is_pill_physically_visible: {
+                  type: Type.BOOLEAN,
+                  description: "True ONLY if an actual solid pill/tablet/capsule is visibly held in the fingers or palm in Frame 1 or 2. False if the hand is empty or pinching air.",
+                },
+                pinching_empty_air_or_empty_hand: {
+                  type: Type.BOOLEAN,
+                  description: "True if the patient is posing an empty hand or pinching fingers with no medication between them.",
+                },
+                description_of_hand_contents: {
+                  type: Type.STRING,
+                  description: "Exact visual description of what is in the patient's hand in Frame 1 and 2.",
+                },
+              },
+              required: [
+                'is_pill_physically_visible',
+                'pinching_empty_air_or_empty_hand',
+                'description_of_hand_contents',
+              ],
+            },
             status: {
               type: Type.STRING,
               description: "Must be 'MEDICINE_TAKEN', 'MEDICINE_NOT_TAKEN', or 'UNVERIFIED'",
@@ -226,6 +392,7 @@ DECISION CRITERIA:
             },
           },
           required: [
+            'frame_1_and_2_pill_check',
             'status',
             'verified',
             'confidence',
@@ -243,7 +410,8 @@ DECISION CRITERIA:
     if (!text) return null;
 
     const parsed = JSON.parse(text);
-    return normalizeVerification(parsed, 'Gemini 3.8 Flash Vision', 'gemini', expectedMed);
+    console.log('Gemini Parsed Inspection Output:', JSON.stringify(parsed, null, 2));
+    return normalizeVerification(parsed, 'Google Gemini 3.5 Flash Vision', 'gemini', expectedMed);
   } catch (err) {
     console.error('Gemini Verification Error:', err);
     return null;
@@ -272,29 +440,80 @@ export function normalizeVerification(
     water_intake: '00:16',
   };
 
-  // Logical inference: mouth interaction implies hand-to-mouth trajectory
-  if (events.mouth_interaction) {
-    events.medicine_to_mouth = true;
-    if (!timestamps.medicine_to_mouth) {
-      timestamps.medicine_to_mouth = timestamps.mouth_interaction || '00:07';
+  // STRICT PILL INSPECTION CHECK:
+  // If Frame 1/2 check indicated no pill or empty hand pinch, force medicine_detected=false!
+  if (parsed.frame_1_and_2_pill_check) {
+    if (
+      parsed.frame_1_and_2_pill_check.is_pill_physically_visible === false ||
+      parsed.frame_1_and_2_pill_check.pinching_empty_air_or_empty_hand === true
+    ) {
+      events.medicine_detected = false;
     }
   }
 
-  // If pill in hand + hand empty + (trajectory or mouth contact) => verified intake
-  if (events.medicine_detected && events.hand_empty && (events.medicine_to_mouth || events.mouth_interaction)) {
-    events.medicine_to_mouth = true;
-    events.mouth_interaction = true;
+  // If medicine in hand failed at start, IMMEDIATELY fail the entire verification!
+  if (!events.medicine_detected) {
+    const medDesc = parsed.frame_1_and_2_pill_check?.description_of_hand_contents || 'Empty hand / no pill detected';
+    return {
+      status: 'MEDICINE_NOT_TAKEN',
+      verified: false,
+      confidence: 0.96,
+      sequence_valid: false,
+      events: {
+        medicine_detected: false,
+        medicine_to_mouth: false,
+        mouth_interaction: false,
+        hand_empty: false,
+        water_intake: events.water_intake || false,
+      },
+      timestamps: {
+        medicine_detected: null,
+        medicine_to_mouth: null,
+        mouth_interaction: null,
+        hand_empty: null,
+        water_intake: events.water_intake ? timestamps.water_intake : null,
+      },
+      step_confidences: {
+        medicine_confidence: 0.20,
+        hand_to_mouth_confidence: 0.30,
+        mouth_interaction_confidence: 0.30,
+        hand_empty_confidence: 0.40,
+        water_confidence: events.water_intake ? 0.85 : 0.20,
+      },
+      medicine_details: {
+        detected_name: expectedMed,
+        appearance: `None (${medDesc})`,
+        color: 'None',
+        shape: 'None',
+        confidence: 0.20,
+        notes: `Verification rejected: Frame inspection confirmed the hand was empty when presented to the camera (${medDesc}).`,
+        hand_pill_detected: false,
+      },
+      failed_step: 'medicine_detected',
+      explanation: `Verification rejected at Step 1: Hand was empty when presented to the camera (${medDesc}). Patient must visibly hold an actual solid pill or tablet before moving hand to mouth.`,
+      message: 'Medication not verified: Hand was empty when presented to camera. No pill was held in fingers or palm.',
+      model_used: modelName,
+      ai_provider: provider,
+    };
   }
 
+  // All 4 mandatory steps must be directly confirmed by vision. Zero assumptions.
   const allFour =
-    events.medicine_detected &&
-    events.medicine_to_mouth &&
-    events.mouth_interaction &&
-    events.hand_empty;
+    events.medicine_detected === true &&
+    events.medicine_to_mouth === true &&
+    events.mouth_interaction === true &&
+    events.hand_empty === true;
 
-  const status = allFour ? 'MEDICINE_TAKEN' : (parsed.status || 'MEDICINE_NOT_TAKEN');
-  const verified = allFour ? true : !!parsed.verified;
-  const failed_step = allFour ? null : parsed.failed_step;
+  const verified = allFour && (parsed.status === 'MEDICINE_TAKEN' || parsed.verified === true);
+  const status: 'MEDICINE_TAKEN' | 'MEDICINE_NOT_TAKEN' = verified ? 'MEDICINE_TAKEN' : 'MEDICINE_NOT_TAKEN';
+
+  let failed_step: string | null = parsed.failed_step || null;
+  if (!verified && !failed_step) {
+    if (!events.medicine_detected) failed_step = 'medicine_detected';
+    else if (!events.medicine_to_mouth) failed_step = 'medicine_to_mouth';
+    else if (!events.mouth_interaction) failed_step = 'mouth_interaction';
+    else if (!events.hand_empty) failed_step = 'hand_empty';
+  }
 
   const stepConf = parsed.step_confidences || {};
   const step_confidences: any = {
@@ -308,30 +527,52 @@ export function normalizeVerification(
   const medDetails = parsed.medicine_details || {};
   const medicine_details = {
     detected_name: medDetails.detected_name || expectedMed,
-    appearance: medDetails.appearance || 'Solid oral medication detected in palm/fingers',
-    color: medDetails.color || 'White/off-white',
-    shape: medDetails.shape || 'Round tablet/capsule',
-    confidence: medDetails.confidence ?? 0.92,
-    notes: medDetails.notes || 'Pill detected in hand, gesture tracked to mouth, palm confirmed empty.',
+    appearance: medDetails.appearance || (events.medicine_detected ? 'Solid oral medication detected in palm/fingers' : 'None (empty hand detected)'),
+    color: medDetails.color || (events.medicine_detected ? 'White/off-white' : 'None'),
+    shape: medDetails.shape || (events.medicine_detected ? 'Round tablet/capsule' : 'None'),
+    confidence: medDetails.confidence ?? (events.medicine_detected ? 0.92 : 0.35),
+    notes: medDetails.notes || (verified ? 'Pill detected in hand, gesture tracked to mouth, palm confirmed empty.' : `Verification halted at ${failed_step || 'clinical protocol'}.`),
     hand_pill_detected: events.medicine_detected,
   };
+
+  let explanation = parsed.explanation;
+  if (!explanation) {
+    explanation = verified
+      ? 'Medicine detected in hand → hand gesture to mouth → mouth interaction confirmed → hand confirmed empty.'
+      : `Clinical verification failed at ${failed_step || 'step'}: Required physical action was not verified in recorded video frames.`;
+  }
+
+  let message = parsed.message;
+  if (!message) {
+    if (verified) {
+      message = 'Medicine intake verified successfully. Hand gesture, mouth ingestion, and clean empty hand confirmed.';
+    } else {
+      if (failed_step === 'medicine_detected') {
+        message = 'Medication not verified: Hand was empty when presented to camera. No pill was held in hand.';
+      } else if (failed_step === 'medicine_to_mouth') {
+        message = 'Medication not verified: Hand gesture bringing medicine to mouth was not detected.';
+      } else if (failed_step === 'mouth_interaction') {
+        message = 'Medication not verified: Ingestion into mouth cavity was not confirmed.';
+      } else if (failed_step === 'hand_empty') {
+        message = 'Medication not verified: Clean empty hand was not confirmed after intake.';
+      } else {
+        message = 'Could not verify complete medicine intake.';
+      }
+    }
+  }
 
   return {
     status,
     verified,
-    confidence: allFour ? Math.max(parsed.confidence || 0.92, 0.93) : (parsed.confidence || 0.5),
-    sequence_valid: true,
+    confidence: verified ? Math.max(parsed.confidence || 0.92, 0.93) : Math.min(parsed.confidence || 0.45, 0.48),
+    sequence_valid: verified,
     events,
     timestamps,
     step_confidences,
     medicine_details,
     failed_step,
-    explanation: parsed.explanation || (allFour
-      ? 'Medicine detected in hand → hand gesture to mouth → mouth interaction confirmed → hand confirmed empty.'
-      : 'Incomplete sequence or missing required clinical verification step.'),
-    message: parsed.message || (allFour
-      ? 'Medicine intake verified successfully. Hand gesture, mouth ingestion, and empty hand confirmed.'
-      : 'Could not verify complete medicine intake.'),
+    explanation,
+    message,
     model_used: modelName,
     ai_provider: provider,
   };
@@ -352,11 +593,26 @@ export async function verifyPillInFrame(
 }> {
   const ai = getGeminiClient();
   if (!ai) {
-    return {
-      pill_detected: false,
-      confidence: 0.5,
-      reason: 'Clinical vision model offline',
-    };
+    try {
+      const { verifyPillWithOpenAI } = await import('./openAiService.js');
+      const openAiResult = await verifyPillWithOpenAI(frameBase64, expectedMed);
+      if (openAiResult) {
+        return openAiResult;
+      }
+    } catch (e) {
+      // Fallback below
+    }
+
+    try {
+      const { detectPillInFrameDirect } = await import('./computerVisionService.js');
+      return await detectPillInFrameDirect(frameBase64, expectedMed);
+    } catch (e) {
+      return {
+        pill_detected: false,
+        confidence: 0.5,
+        reason: 'Vision analysis error: ensure clear lighting and camera visibility',
+      };
+    }
   }
 
   try {

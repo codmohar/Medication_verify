@@ -15,29 +15,21 @@ import {
   Clock,
   Sparkles
 } from 'lucide-react';
-import { Patient, ActivePage, CareWorker } from '../types';
 import { generateNextPatientId } from '../utils/helpers';
 
-interface Page5AddNewPatientProps {
-  careWorker: CareWorker;
-  existingPatientCount: number;
-  onRegisterSuccess: (newPatient: Patient) => void;
-  onCancel: () => void;
-}
-
-export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
+export const Page5AddNewPatient = ({
   careWorker,
   existingPatientCount,
   onRegisterSuccess,
   onCancel,
 }) => {
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [currentStep, setCurrentStep] = useState(1);
   const [validationError, setValidationError] = useState('');
 
   // Step 1: Personal Details
   const [fullName, setFullName] = useState('Deepak Sharma');
-  const [age, setAge] = useState<number>(38);
-  const [gender, setGender] = useState<'Male' | 'Female' | 'Other'>('Male');
+  const [age, setAge] = useState(38);
+  const [gender, setGender] = useState('Male');
   const [dateOfBirth, setDateOfBirth] = useState('1988-04-16');
   const [phoneNumber, setPhoneNumber] = useState('+91 98761 12345');
   const [address, setAddress] = useState('H-42, Vikas Puri, West Delhi');
@@ -49,19 +41,19 @@ export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
   const [treatmentStartDate, setTreatmentStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [expectedTreatmentEndDate, setExpectedTreatmentEndDate] = useState('2027-03-16');
   const [medicationName, setMedicationName] = useState('4-FDC (Rifampicin + Isoniazid + Pyrazinamide + Ethambutol)');
-  const [dosesPerDay, setDosesPerDay] = useState<number>(2);
-  const [prescribedTimes, setPrescribedTimes] = useState<string>('08:00 AM, 08:00 PM');
-  const [allowedDoseWindowMinutes, setAllowedDoseWindowMinutes] = useState<number>(60);
+  const [dosesPerDay, setDosesPerDay] = useState(2);
+  const [prescribedTimes, setPrescribedTimes] = useState('08:00 AM, 08:00 PM');
+  const [allowedDoseWindowMinutes, setAllowedDoseWindowMinutes] = useState(60);
   const [doctorName, setDoctorName] = useState(careWorker.name);
   const [treatmentCentre, setTreatmentCentre] = useState(careWorker.centre);
 
   // Step 3: Device Assignment
   const nextPillboxNum = String(10 + existingCountSafe(existingPatientCount)).padStart(2, '0');
   const [pillboxId, setPillboxId] = useState(`DSBOX-${nextPillboxNum}`);
-  const [compartments, setCompartments] = useState<number>(14);
-  const [esp32Status, setEsp32Status] = useState<'Online' | 'Offline' | 'Testing'>('Online');
+  const [compartments, setCompartments] = useState(14);
+  const [esp32Status, setEsp32Status] = useState('Online');
   const [lastSync, setLastSync] = useState('Just now (Testing Signal OK)');
-  const [verificationMethod, setVerificationMethod] = useState<'Smart Pillbox Access' | 'Camera-Assisted Verification' | 'Both'>('Both');
+  const [verificationMethod, setVerificationMethod] = useState('Both');
 
   // Step 4: Caregiver / Notification Details
   const [caregiverName, setCaregiverName] = useState('Sunita Sharma');
@@ -74,11 +66,11 @@ export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
   const [prefOffline, setPrefOffline] = useState(true);
   const [consentGiven, setConsentGiven] = useState(true);
 
-  function existingCountSafe(count: number) {
-    return Math.max(1, count);
+  function existingCountSafe(count) {
+    return Math.max(1, count || 0);
   }
 
-  const validateStep = (step: number): boolean => {
+  const validateStep = (step) => {
     setValidationError('');
     if (step === 1) {
       if (!fullName.trim() || !age || !dateOfBirth || !address.trim() || !emergencyContactName.trim() || !emergencyContactNumber.trim()) {
@@ -113,20 +105,20 @@ export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
 
   const handleNext = () => {
     if (validateStep(currentStep)) {
-      setCurrentStep((prev) => Math.min(5, prev + 1) as 1 | 2 | 3 | 4 | 5);
+      setCurrentStep((prev) => Math.min(5, prev + 1));
     }
   };
 
   const handleBack = () => {
     setValidationError('');
-    setCurrentStep((prev) => Math.max(1, prev - 1) as 1 | 2 | 3 | 4 | 5);
+    setCurrentStep((prev) => Math.max(1, prev - 1));
   };
 
   const handleFinalSubmit = () => {
     const generatedId = generateNextPatientId(existingPatientCount);
     const timesArray = prescribedTimes.split(',').map((t) => t.trim());
 
-    const newPatient: Patient = {
+    const newPatient = {
       id: generatedId,
       authPin: '1234',
       fullName,
@@ -246,7 +238,7 @@ export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
               <React.Fragment key={step.num}>
                 <div 
                   onClick={() => {
-                    if (step.num < currentStep) setCurrentStep(step.num as any);
+                    if (step.num < currentStep) setCurrentStep(step.num);
                   }}
                   className={`flex items-center gap-2 cursor-pointer transition-all ${
                     isCurrent 
@@ -332,7 +324,7 @@ export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
                   <label className="block text-xs font-bold text-slate-700 mb-1">Gender *</label>
                   <select
                     value={gender}
-                    onChange={(e) => setGender(e.target.value as any)}
+                    onChange={(e) => setGender(e.target.value)}
                     className="w-full p-2.5 text-xs rounded-xl glass-input focus:outline-none bg-white font-medium"
                   >
                     <option value="Male">Male</option>
@@ -584,7 +576,7 @@ export const Page5AddNewPatient: React.FC<Page5AddNewPatientProps> = ({
                   Verification Method Protocol *
                 </label>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {(['Smart Pillbox Access', 'Camera-Assisted Verification', 'Both'] as const).map((method) => (
+                  {['Smart Pillbox Access', 'Camera-Assisted Verification', 'Both'].map((method) => (
                     <label
                       key={method}
                       onClick={() => setVerificationMethod(method)}

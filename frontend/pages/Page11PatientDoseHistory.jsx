@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Patient, ActivePage, DoseRecord } from '../types';
 import { StatusBadge } from '../components/StatusBadge';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { 
@@ -15,20 +14,14 @@ import {
   Sparkles
 } from 'lucide-react';
 
-interface Page11PatientDoseHistoryProps {
-  patient: Patient;
-  onNavigate: (page: ActivePage) => void;
-  onBack: () => void;
-}
-
-export const Page11PatientDoseHistory: React.FC<Page11PatientDoseHistoryProps> = ({
+export const Page11PatientDoseHistory = ({
   patient,
   onNavigate,
   onBack,
 }) => {
-  const [filterRange, setFilterRange] = useState<'ALL' | 'WEEK' | 'MONTH'>('ALL');
+  const [filterRange, setFilterRange] = useState('ALL');
   const [showReportModal, setShowReportModal] = useState(false);
-  const [selectedRecordForIssue, setSelectedRecordForIssue] = useState<DoseRecord | null>(null);
+  const [selectedRecordForIssue, setSelectedRecordForIssue] = useState(null);
   const [issueType, setIssueType] = useState('Device did not detect pill removal');
   const [issueNotes, setIssueNotes] = useState('');
   const [issueSubmitted, setIssueSubmitted] = useState(false);
@@ -37,7 +30,6 @@ export const Page11PatientDoseHistory: React.FC<Page11PatientDoseHistoryProps> =
   const filteredHistory = patient.history.filter((record) => {
     if (filterRange === 'ALL') return true;
     if (filterRange === 'WEEK') {
-      // Last 7 days
       return true;
     }
     if (filterRange === 'MONTH') {
@@ -46,13 +38,13 @@ export const Page11PatientDoseHistory: React.FC<Page11PatientDoseHistoryProps> =
     return true;
   });
 
-  const handleOpenReportModal = (record?: DoseRecord) => {
+  const handleOpenReportModal = (record) => {
     setSelectedRecordForIssue(record || patient.history[0] || null);
     setShowReportModal(true);
     setIssueSubmitted(false);
   };
 
-  const handleSubmitIssue = (e: React.FormEvent) => {
+  const handleSubmitIssue = (e) => {
     e.preventDefault();
     setIssueSubmitted(true);
     setTimeout(() => {
@@ -99,7 +91,7 @@ export const Page11PatientDoseHistory: React.FC<Page11PatientDoseHistoryProps> =
           <span className="font-bold text-slate-500 uppercase tracking-wider text-[11px] mr-1 flex items-center gap-1">
             <Filter className="w-3.5 h-3.5" /> Filter:
           </span>
-          {(['ALL', 'WEEK', 'MONTH'] as const).map((mode) => (
+          {['ALL', 'WEEK', 'MONTH'].map((mode) => (
             <button
               key={mode}
               onClick={() => setFilterRange(mode)}

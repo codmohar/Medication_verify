@@ -22,8 +22,31 @@ import {
   Eye,
   Cpu,
   Scan,
-  Layers
+  Layers,
+  Activity,
+  Zap,
+  Crosshair,
+  ListChecks,
+  CheckCheck,
+  Clock,
+  ArrowUp,
+  Target,
+  Code,
+  Download,
+  Copy,
+  Terminal,
+  Volume2,
+  VolumeX,
+  Lightbulb,
+  Unlock,
+  Lock,
+  Radio,
+  FileCode,
+  Sliders,
+  ChevronDown
 } from 'lucide-react';
+import { RealtimeScanningOverlay } from './RealtimeScanningOverlay';
+import { generatePatientESP32Code } from '../utils/helpers';
 
 interface MedicationIntakeModalProps {
   isOpen: boolean;
@@ -50,6 +73,78 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
   const [phase, setPhase] = useState<IntakePhase>('pillbox_verification');
   const [pillboxStep, setPillboxStep] = useState<'connecting' | 'lid_open' | 'pill_retrieved' | 'verified'>('connecting');
   
+  // Interactive Pillbox Hardware & Telemetry State
+  const isCompartment1 = slot === 'Morning';
+  const targetCompartmentNumber = isCompartment1 ? 1 : 2;
+  const targetLdrPin = isCompartment1 ? 34 : 35;
+  const targetLedPin = isCompartment1 ? 25 : 26;
+  const targetBuzzerPin = 27;
+
+  const [pillboxLdrValue, setPillboxLdrValue] = useState<number>(245);
+  const pillboxThreshold = 1000;
+  const [isLidOpened, setIsLidOpened] = useState<boolean>(false);
+  const [ledActive, setLedActive] = useState<boolean>(true);
+  const [buzzerActive, setBuzzerActive] = useState<boolean>(true);
+  const [showFirmwareDrawer, setShowFirmwareDrawer] = useState<boolean>(false);
+  const [showSerialTerminal, setShowSerialTerminal] = useState<boolean>(false);
+  const [wifiSsid, setWifiSsid] = useState<string>('Galaxy A22 5G');
+  const [wifiPass, setWifiPass] = useState<string>('mohar466');
+  const [copiedFirmware, setCopiedFirmware] = useState<boolean>(false);
+  const [serialLogs, setSerialLogs] = useState<string[]>([]);
+
+  const handleOpenPillboxLid = () => {
+    const lightVal = 2650;
+    setPillboxLdrValue(lightVal);
+    setIsLidOpened(true);
+    setPillboxStep('verified');
+    setLedActive(false);
+    setBuzzerActive(false);
+    setSerialLogs(prev => [
+      ...prev,
+      `------------------------------------------`,
+      `[LDR ${targetCompartmentNumber}] Reading: ${lightVal} > 1000 (LIGHT DETECTED!)`,
+      `******************************************`,
+      `       DOSE ${targetCompartmentNumber} TAKEN`,
+      `       LIGHT DETECTED`,
+      `       COMPARTMENT ${targetCompartmentNumber} OPENED`,
+      `       LED ${targetCompartmentNumber} = OFF | BUZZER = OFF`,
+      `******************************************`,
+      `[TELEMETRY] Pill access confirmed. Step 2 (AI Video Verification) is now unlocked!`
+    ]);
+  };
+
+  const handleResetPillboxLid = () => {
+    setPillboxLdrValue(245);
+    setIsLidOpened(false);
+    setPillboxStep('lid_open');
+    setLedActive(true);
+    setBuzzerActive(true);
+    setSerialLogs(prev => [
+      ...prev,
+      `[RESET] Compartment ${targetCompartmentNumber} lid closed (LDR: 245 <= 1000 DARK). LED=ON, Buzzer=ON.`
+    ]);
+  };
+
+  const handleCopyFirmware = () => {
+    const code = generatePatientESP32Code(patient, { ssid: wifiSsid, password: wifiPass });
+    navigator.clipboard.writeText(code);
+    setCopiedFirmware(true);
+    setTimeout(() => setCopiedFirmware(false), 2000);
+  };
+
+  const handleDownloadFirmware = () => {
+    const code = generatePatientESP32Code(patient, { ssid: wifiSsid, password: wifiPass });
+    const blob = new Blob([code], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `dosesure_esp32_${patient.id}.ino`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+  
   // Video capture mode: 'camera' or 'upload'
   const [captureMode, setCaptureMode] = useState<'camera' | 'upload'>('camera');
   
@@ -63,8 +158,58 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
   const [videoDuration, setVideoDuration] = useState<number>(20);
   
-  // AI Verification state
-  const [selectedAiProvider, setSelectedAiProvider] = useState<'auto' | 'gemini' | 'openai' | 'huggingface' | 'computer_vision'>('auto');
+  // Real-time live scanning states
+  const [realtimeActivities, setRealtimeActivities] = useState<{
+    pill_detected: { active: boolean; confidence: number; label: string; boundingBox?: { x: number; y: number; w: number; h: number }; details: string };
+    hand_gesture: { active: boolean; trajectory_progress: number; direction: 'steady' | 'moving_up' | 'at_mouth' | 'retracted'; confidence: number; details: string };
+    mouth_interaction: { active: boolean; confidence: number; oral_contact: boolean; swallow_detected: boolean; details: string };
+    hand_empty: { active: boolean; confidence: number; palm_open: boolean; pill_absent: boolean; details: string };
+    water_intake: { active: boolean; confidence: number; details: string };
+  } | null>(null);
+
+  const [realtimeEventsDone, setRealtimeEventsDone] = useState<{
+    medicine_detected: boolean;
+    medicine_to_mouth: boolean;
+    mouth_interaction: boolean;
+    hand_empty: boolean;
+    water_intake: boolean;
+  }>({
+    medicine_detected: false,
+    medicine_to_mouth: false,
+    mouth_interaction: false,
+    hand_empty: false,
+    water_intake: false,
+  });
+
+  const [realtimeTimestamps, setRealtimeTimestamps] = useState<{
+    medicine_detected: string | null;
+    medicine_to_mouth: string | null;
+    mouth_interaction: string | null;
+    hand_empty: string | null;
+    water_intake: string | null;
+  }>({
+    medicine_detected: null,
+    medicine_to_mouth: null,
+    mouth_interaction: null,
+    hand_empty: null,
+    water_intake: null,
+  });
+
+  const [liveCoachInstruction, setLiveCoachInstruction] = useState<string>(
+    '👉 Step 1: Hold the pill clearly in your palm facing the camera'
+  );
+
+  const [liveActivityFeed, setLiveActivityFeed] = useState<Array<{
+    id: string;
+    time: string;
+    title: string;
+    detail: string;
+    step: 'pill' | 'gesture' | 'mouth' | 'empty' | 'water';
+  }>>([]);
+
+  const [playbackCurrentSeconds, setPlaybackCurrentSeconds] = useState<number>(0);
+
+  // Verification state
   const [analysisStepText, setAnalysisStepText] = useState<string>('Uploading video frames...');
   const [verificationResult, setVerificationResult] = useState<VerificationResult | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -81,14 +226,28 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
   const preCountdownIntervalRef = useRef<number | null>(null);
   const canvasSimRef = useRef<HTMLCanvasElement | null>(null);
   const simAnimIdRef = useRef<number | null>(null);
+  const isScanningRef = useRef<boolean>(false);
+  const isPillCheckingRef = useRef<boolean>(false);
+  const lastScanTimeRef = useRef<number>(0);
+  const lastPillCheckTimeRef = useRef<number>(0);
+  const recordingSecondsElapsedRef = useRef<number>(0);
+  recordingSecondsElapsedRef.current = recordingSecondsElapsed;
+
+  const realtimeEventsDoneRef = useRef(realtimeEventsDone);
+  realtimeEventsDoneRef.current = realtimeEventsDone;
+
+  const realtimeTimestampsRef = useRef(realtimeTimestamps);
+  realtimeTimestampsRef.current = realtimeTimestamps;
+
+  // Buffer of all continuous camera frames taken during recording session
+  const recordedFramesBufferRef = useRef<Array<{ timestamp: string; imageBase64: string }>>([]);
 
   // Snapshot frame from live stream or simulated canvas
   const captureFrameSnapshot = useCallback((timestamp: string, label: string) => {
     try {
       let canvasToExtract: HTMLCanvasElement | null = null;
-      if (canvasSimRef.current) {
-        canvasToExtract = canvasSimRef.current;
-      } else if (videoRef.current && videoRef.current.videoWidth > 0) {
+      // Prioritize active physical camera over simulation canvas
+      if (videoRef.current && videoRef.current.videoWidth > 0 && cameraState === 'active') {
         const v = videoRef.current;
         const c = document.createElement('canvas');
         c.width = Math.min(640, v.videoWidth || 640);
@@ -98,6 +257,8 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
           ctx.drawImage(v, 0, 0, c.width, c.height);
           canvasToExtract = c;
         }
+      } else if (canvasSimRef.current && cameraState === 'simulated') {
+        canvasToExtract = canvasSimRef.current;
       }
 
       if (canvasToExtract) {
@@ -107,11 +268,290 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
           imageBase64: dataUrl,
           label,
         });
+        return dataUrl;
       }
     } catch (e) {
       console.warn('Frame capture snapshot non-fatal error:', e);
     }
-  }, []);
+    return null;
+  }, [cameraState]);
+
+  // Asynchronous dedicated optical pill inspector (runs non-blocking in background)
+  const checkPillRealtimeAsync = useCallback(async () => {
+    if (realtimeEventsDoneRef.current.medicine_detected) return;
+    if (isPillCheckingRef.current) return;
+
+    let frameBase64: string | undefined = undefined;
+    if (videoRef.current && videoRef.current.videoWidth > 0) {
+      const v = videoRef.current;
+      const c = document.createElement('canvas');
+      c.width = Math.min(640, v.videoWidth || 640);
+      c.height = Math.round(c.width * ((v.videoHeight || 480) / (v.videoWidth || 640)));
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        frameBase64 = c.toDataURL('image/jpeg', 0.85);
+      }
+    } else if (canvasSimRef.current) {
+      frameBase64 = canvasSimRef.current.toDataURL('image/jpeg', 0.85);
+    }
+
+    if (!frameBase64) return;
+
+    isPillCheckingRef.current = true;
+    try {
+      const res = await fetch('/api/verify-pill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frameBase64,
+          expectedMedicineName: patient.medicationName,
+        }),
+      });
+
+      if (res.ok) {
+        const pillResult = await res.json();
+        if (pillResult.pill_detected) {
+          const sec = recordingSecondsElapsedRef.current;
+          const mm = Math.floor(sec / 60).toString().padStart(2, '0');
+          const ss = (sec % 60).toString().padStart(2, '0');
+          const currentTs = `${mm}:${ss}`;
+
+          setRealtimeEventsDone(prev => ({ ...prev, medicine_detected: true }));
+          setRealtimeTimestamps(prev => ({
+            ...prev,
+            medicine_detected: prev.medicine_detected || currentTs,
+          }));
+          realtimeEventsDoneRef.current.medicine_detected = true;
+          realtimeTimestampsRef.current.medicine_detected = currentTs;
+
+          captureFrameSnapshot(currentTs, 'Pill in Hand (Optical AI Verified)');
+          setLiveCoachInstruction('✅ Medicine detected between fingers / in palm! Now bring it up to your mouth');
+          setLiveActivityFeed(prev => [
+            {
+              id: `pill-${Date.now()}`,
+              time: currentTs,
+              title: 'Medicine Detected Between Fingers / Palm',
+              detail: pillResult.reason || 'Physical oral medication confirmed held in hand.',
+              step: 'pill',
+            },
+            ...prev,
+          ]);
+        } else if (pillResult.reason && (pillResult.reason.toLowerCase().includes('empty') || pillResult.reason.toLowerCase().includes('pinch'))) {
+          setLiveCoachInstruction('⚠️ Empty hand pinch detected. Please place your actual medicine between your fingers or in palm');
+        }
+      }
+    } catch (err) {
+      console.warn('Real-time pill verification async check non-fatal error:', err);
+    } finally {
+      isPillCheckingRef.current = false;
+    }
+  }, [patient.medicationName, captureFrameSnapshot]);
+
+  // Perform real-time scanning on current camera frame
+  const scanRealtimeFrame = useCallback(async (elapsedSec: number) => {
+    if (isScanningRef.current) return;
+    isScanningRef.current = true;
+
+    try {
+      const mm = Math.floor(elapsedSec / 60).toString().padStart(2, '0');
+      const ss = (elapsedSec % 60).toString().padStart(2, '0');
+      const currentTs = `${mm}:${ss}`;
+
+      // Grab snapshot base64 if available
+      let frameBase64: string | undefined = undefined;
+      if (videoRef.current && videoRef.current.videoWidth > 0) {
+        const v = videoRef.current;
+        const c = document.createElement('canvas');
+        c.width = 320;
+        c.height = 240;
+        const ctx = c.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(v, 0, 0, 320, 240);
+          frameBase64 = c.toDataURL('image/jpeg', 0.7);
+        }
+      } else if (canvasSimRef.current) {
+        frameBase64 = canvasSimRef.current.toDataURL('image/jpeg', 0.7);
+      }
+
+      const res = await fetch('/api/realtime-scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frameBase64,
+          elapsedSeconds: elapsedSec,
+          expectedMedicineName: patient.medicationName,
+          shouldCheckPill: !realtimeEventsDoneRef.current.medicine_detected,
+          pillVerified: realtimeEventsDoneRef.current.medicine_detected,
+          previousEvents: realtimeEventsDoneRef.current,
+          previousTimestamps: realtimeTimestampsRef.current,
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setRealtimeActivities(data.activities);
+        setRealtimeEventsDone(data.events_done);
+        setRealtimeTimestamps(data.event_timestamps);
+        realtimeEventsDoneRef.current = data.events_done;
+        realtimeTimestampsRef.current = data.event_timestamps;
+        
+        if (data.instruction) {
+          setLiveCoachInstruction(data.instruction);
+        }
+
+        // Check if any event transitioned to done and log it
+        if (data.events_done.medicine_detected && !realtimeEventsDoneRef.current.medicine_detected) {
+          const ts = data.event_timestamps.medicine_detected || currentTs;
+          captureFrameSnapshot(ts, 'Pill in Hand (Live Scanner)');
+          setLiveActivityFeed(prev => [
+            {
+              id: `pill-${Date.now()}`,
+              time: ts,
+              title: 'Pill in Hand Confirmed',
+              detail: data.activities.pill_detected.details,
+              step: 'pill',
+            },
+            ...prev,
+          ]);
+        }
+
+        if (data.events_done.medicine_to_mouth && !realtimeEventsDoneRef.current.medicine_to_mouth) {
+          const ts = data.event_timestamps.medicine_to_mouth || currentTs;
+          captureFrameSnapshot(ts, 'Hand to Mouth (Live Scanner)');
+          setLiveActivityFeed(prev => [
+            {
+              id: `gesture-${Date.now()}`,
+              time: ts,
+              title: 'Hand Trajectory to Mouth Tracked',
+              detail: data.activities.hand_gesture.details,
+              step: 'gesture',
+            },
+            ...prev,
+          ]);
+        }
+
+        if (data.events_done.mouth_interaction && !realtimeEventsDoneRef.current.mouth_interaction) {
+          const ts = data.event_timestamps.mouth_interaction || currentTs;
+          captureFrameSnapshot(ts, 'Mouth Ingestion (Live Scanner)');
+          setLiveActivityFeed(prev => [
+            {
+              id: `mouth-${Date.now()}`,
+              time: ts,
+              title: 'Mouth Ingestion & Swallow Verified',
+              detail: data.activities.mouth_interaction.details,
+              step: 'mouth',
+            },
+            ...prev,
+          ]);
+        }
+
+        if (data.events_done.hand_empty && !realtimeEventsDoneRef.current.hand_empty) {
+          const ts = data.event_timestamps.hand_empty || currentTs;
+          captureFrameSnapshot(ts, 'Empty Hand (Live Scanner)');
+          setLiveActivityFeed(prev => [
+            {
+              id: `empty-${Date.now()}`,
+              time: ts,
+              title: 'Empty Palm Verified',
+              detail: data.activities.hand_empty.details,
+              step: 'empty',
+            },
+            ...prev,
+          ]);
+        }
+
+        if (data.events_done.water_intake && !realtimeEventsDoneRef.current.water_intake) {
+          const ts = data.event_timestamps.water_intake || currentTs;
+          captureFrameSnapshot(ts, 'Water Intake (Live Scanner)');
+          setLiveActivityFeed(prev => [
+            {
+              id: `water-${Date.now()}`,
+              time: ts,
+              title: 'Water Intake Detected (Optional)',
+              detail: data.activities.water_intake.details,
+              step: 'water',
+            },
+            ...prev,
+          ]);
+        }
+      }
+    } catch (e) {
+      console.warn('Realtime frame scan non-fatal error:', e);
+    } finally {
+      isScanningRef.current = false;
+    }
+  }, [patient.medicationName, captureFrameSnapshot]);
+
+  // Quick manual mark for any activity during live recording
+  const handleQuickMarkActivity = (key: keyof typeof realtimeEventsDone, label: string) => {
+    // Cannot mark gesture or clean hand before medicine in hand is confirmed
+    if (key !== 'medicine_detected' && !realtimeEventsDoneRef.current.medicine_detected) {
+      setLiveCoachInstruction('⚠️ Step 1 Mandatory: You must confirm medicine in hand before marking gesture or empty hand!');
+      return;
+    }
+
+    const mm = Math.floor(recordingSecondsElapsed / 60).toString().padStart(2, '0');
+    const ss = (recordingSecondsElapsed % 60).toString().padStart(2, '0');
+    const ts = `${mm}:${ss}`;
+
+    setRealtimeEventsDone(prev => ({ ...prev, [key]: true }));
+    setRealtimeTimestamps(prev => ({ ...prev, [key]: prev[key] || ts }));
+
+    captureFrameSnapshot(ts, `${label} (Manual Quick Confirm)`);
+    setLiveActivityFeed(prev => [
+      {
+        id: `${String(key)}-${Date.now()}`,
+        time: ts,
+        title: `${label} Confirmed`,
+        detail: `Manually locked at ${ts} by patient`,
+        step: key === 'medicine_detected' ? 'pill' : key === 'medicine_to_mouth' ? 'gesture' : key === 'mouth_interaction' ? 'mouth' : key === 'hand_empty' ? 'empty' : 'water',
+      },
+      ...prev,
+    ]);
+  };
+
+  // Toggle activity state in review mode
+  const handleToggleActivityInReview = (eventKey: keyof VerificationResult['events']) => {
+    if (!verificationResult) return;
+
+    const updatedEvents = {
+      ...verificationResult.events,
+      [eventKey]: !verificationResult.events[eventKey],
+    };
+
+    const isVerified =
+      updatedEvents.medicine_detected &&
+      updatedEvents.medicine_to_mouth &&
+      updatedEvents.hand_empty;
+
+    let failedStep: string | null = null;
+    if (!updatedEvents.medicine_detected) failedStep = 'medicine_detected';
+    else if (!updatedEvents.medicine_to_mouth) failedStep = 'medicine_to_mouth';
+    else if (!updatedEvents.hand_empty) failedStep = 'hand_empty';
+
+    const updatedResult: VerificationResult = {
+      ...verificationResult,
+      status: isVerified ? 'MEDICINE_TAKEN' : 'MEDICINE_NOT_TAKEN',
+      verified: isVerified,
+      sequence_valid: isVerified,
+      confidence: isVerified ? 0.96 : 0.45,
+      events: updatedEvents,
+      failed_step: failedStep,
+      message: isVerified
+        ? 'Medicine intake verified successfully. 3 mandatory activities confirmed.'
+        : `Medication intake unconfirmed. Activity missing: ${failedStep}.`,
+    };
+
+    setVerificationResult(updatedResult);
+  };
+
+  const handleSeekVideo = (seconds: number) => {
+    if (playbackRef.current) {
+      playbackRef.current.currentTime = seconds;
+      playbackRef.current.play().catch(() => {});
+    }
+  };
 
   const stopCameraStream = useCallback(() => {
     if (simAnimIdRef.current) {
@@ -141,18 +581,58 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
       setRecordedBlob(null);
       setVerificationResult(null);
       setCountdownStart(null);
+      setRealtimeActivities(null);
+      setRealtimeEventsDone({
+        medicine_detected: false,
+        medicine_to_mouth: false,
+        mouth_interaction: false,
+        hand_empty: false,
+        water_intake: false,
+      });
+      setRealtimeTimestamps({
+        medicine_detected: null,
+        medicine_to_mouth: null,
+        mouth_interaction: null,
+        hand_empty: null,
+        water_intake: null,
+      });
+      setLiveCoachInstruction('👉 Step 1: Hold the pill clearly in your palm facing the camera');
+      setLiveActivityFeed([]);
 
-      // Pillbox hardware sequence with auto-advance to video
-      const t1 = setTimeout(() => setPillboxStep('lid_open'), 600);
-      const t2 = setTimeout(() => setPillboxStep('pill_retrieved'), 1300);
-      const t3 = setTimeout(() => setPillboxStep('verified'), 1900);
-      const t4 = setTimeout(() => setPhase('video_capture'), 2500);
+      // Active Pillbox hardware sequence (keeps pillbox interactive before video capture)
+      setIsLidOpened(false);
+      setPillboxLdrValue(245);
+      setLedActive(true);
+      setBuzzerActive(true);
+      setShowFirmwareDrawer(false);
+      setShowSerialTerminal(false);
+
+      const compNum = slot === 'Morning' ? 1 : 2;
+      const ldrPin = slot === 'Morning' ? 34 : 35;
+      const ledPin = slot === 'Morning' ? 25 : 26;
+
+      const t1 = setTimeout(() => {
+        setPillboxStep('lid_open');
+        setSerialLogs([
+          `==========================================`,
+          `           DOSESURE PILLBOX`,
+          `==========================================`,
+          `Device ID: ${patient.pillboxId || 'DSBOX-01'} • Patient: ${patient.fullName} (${patient.id})`,
+          `Connecting to Wi-Fi SSID: '${wifiSsid}' ... Connected!`,
+          `ESP32 IP: 192.168.43.120`,
+          `Time synchronized successfully (NTP UTC+5:30)!`,
+          `------------------------------------------`,
+          `[HARDWARE] Monitoring Compartment ${compNum} (${slot} Dose)`,
+          `[CONFIG] LDR Pin: ${ldrPin} (Threshold: 1000) • LED Pin: ${ledPin} • Buzzer Pin: 27`,
+          `[SENSOR] LDR ${compNum} Value: 245 (DARK <= 1000) - READY FOR OPENING`,
+          `[DOSE TIME REACHED] OPEN COMPARTMENT ${compNum}`,
+          `LED ${compNum} = ON | BUZZER = ON | 30 MINUTE WINDOW STARTED`,
+          `------------------------------------------`,
+        ]);
+      }, 400);
 
       return () => {
         clearTimeout(t1);
-        clearTimeout(t2);
-        clearTimeout(t3);
-        clearTimeout(t4);
       };
     } else {
       stopCameraStream();
@@ -330,6 +810,7 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
 
       streamRef.current = stream;
       setCameraState('active');
+      canvasSimRef.current = null; // Ensure simulation canvas is cleared when camera is active
 
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -415,40 +896,80 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
       }
     }
 
-    // 20-second active recording timer with automatic temporal frame extraction
+    // Continuous active recording session with frame buffering & real-time CV scanning
     capturedFramesRef.current = [];
-    const capturedSeconds = new Set<number>();
+    recordedFramesBufferRef.current = [];
+    lastScanTimeRef.current = 0;
+    let lastBufferFrameTime = 0;
+    isScanningRef.current = false;
+
+    // Reset realtime status at start of recording
+    setRealtimeEventsDone({
+      medicine_detected: false,
+      medicine_to_mouth: false,
+      mouth_interaction: false,
+      hand_empty: false,
+      water_intake: false,
+    });
+    setRealtimeTimestamps({
+      medicine_detected: null,
+      medicine_to_mouth: null,
+      mouth_interaction: null,
+      hand_empty: null,
+      water_intake: null,
+    });
+    setLiveActivityFeed([]);
 
     const startMs = Date.now();
     timerIntervalRef.current = window.setInterval(() => {
       const elapsed = Math.min(20, Math.floor((Date.now() - startMs) / 1000));
       setRecordingSecondsElapsed(elapsed);
 
-      // Snapshot distinct keyframe timestamps for multi-model vision analysis
-      if (elapsed === 2 && !capturedSeconds.has(2)) {
-        capturedSeconds.add(2);
-        captureFrameSnapshot('00:03', 'Pill in Hand (holding medicine)');
-      } else if (elapsed === 6 && !capturedSeconds.has(6)) {
-        capturedSeconds.add(6);
-        captureFrameSnapshot('00:07', 'Hand Gesture (moving up toward mouth)');
-      } else if (elapsed === 10 && !capturedSeconds.has(10)) {
-        capturedSeconds.add(10);
-        captureFrameSnapshot('00:10', 'Mouth Interaction (ingestion & swallow)');
-      } else if (elapsed === 14 && !capturedSeconds.has(14)) {
-        capturedSeconds.add(14);
-        captureFrameSnapshot('00:14', 'Empty Hand (open palm confirmation)');
-      } else if (elapsed === 17 && !capturedSeconds.has(17)) {
-        capturedSeconds.add(17);
-        captureFrameSnapshot('00:17', 'Water Intake (optional adherence)');
+      const now = Date.now();
+
+      // Buffer continuous high-res frames every ~300ms from the live camera
+      if (now - lastBufferFrameTime >= 300) {
+        lastBufferFrameTime = now;
+        const mm = Math.floor(elapsed / 60).toString().padStart(2, '0');
+        const ss = (elapsed % 60).toString().padStart(2, '0');
+        const currentTs = `${mm}:${ss}`;
+
+        let currentFrameBase64: string | null = null;
+        if (videoRef.current && videoRef.current.videoWidth > 0 && cameraState === 'active') {
+          const v = videoRef.current;
+          const c = document.createElement('canvas');
+          c.width = Math.min(640, v.videoWidth || 640);
+          c.height = Math.round(c.width * ((v.videoHeight || 480) / (v.videoWidth || 640)));
+          const ctx = c.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(v, 0, 0, c.width, c.height);
+            currentFrameBase64 = c.toDataURL('image/jpeg', 0.85);
+          }
+        } else if (canvasSimRef.current && cameraState === 'simulated') {
+          currentFrameBase64 = canvasSimRef.current.toDataURL('image/jpeg', 0.85);
+        }
+
+        if (currentFrameBase64) {
+          recordedFramesBufferRef.current.push({
+            timestamp: currentTs,
+            imageBase64: currentFrameBase64,
+          });
+        }
+      }
+
+      // Trigger continuous real-time vision scanning cycle (every ~500ms)
+      if (now - lastScanTimeRef.current >= 500 && !isScanningRef.current) {
+        lastScanTimeRef.current = now;
+        scanRealtimeFrame(elapsed);
       }
 
       if (elapsed >= 20) {
         handleFinishRecording(20);
       }
-    }, 200);
+    }, 150);
   };
 
-  // Finish recording
+  // Finish recording and sample keyframes proportionally across the duration
   const handleFinishRecording = (forcedSeconds?: number) => {
     if (timerIntervalRef.current) {
       clearInterval(timerIntervalRef.current);
@@ -458,6 +979,52 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
     const duration = forcedSeconds || (recordingSecondsElapsed > 0 ? recordingSecondsElapsed : 20);
     setVideoDuration(duration);
     setIsRecording(false);
+
+    // Extract true chronological keyframes across the user's actual recorded video buffer
+    const buffer = recordedFramesBufferRef.current;
+    if (buffer && buffer.length > 0) {
+      capturedFramesRef.current = [];
+      const len = buffer.length;
+
+      // 6 key temporal checkpoints for comprehensive clinical visual verification:
+      const idx1 = Math.min(len - 1, Math.max(0, Math.floor(len * 0.10))); // Pill presentation
+      const idx2 = Math.min(len - 1, Math.max(0, Math.floor(len * 0.28))); // Pill inspection
+      const idx3 = Math.min(len - 1, Math.max(0, Math.floor(len * 0.48))); // Hand upward trajectory
+      const idx4 = Math.min(len - 1, Math.max(0, Math.floor(len * 0.65))); // Mouth ingestion
+      const idx5 = Math.min(len - 1, Math.max(0, Math.floor(len * 0.80))); // Swallow & withdrawal
+      const idx6 = Math.min(len - 1, Math.max(0, Math.floor(len * 0.95))); // Clean open palm
+
+      capturedFramesRef.current.push({
+        timestamp: buffer[idx1].timestamp,
+        imageBase64: buffer[idx1].imageBase64,
+        label: 'Step 1: Medicine in Hand (Presentation to camera)',
+      });
+      capturedFramesRef.current.push({
+        timestamp: buffer[idx2].timestamp,
+        imageBase64: buffer[idx2].imageBase64,
+        label: 'Step 1b: Pill Visual Confirmation (Close inspection)',
+      });
+      capturedFramesRef.current.push({
+        timestamp: buffer[idx3].timestamp,
+        imageBase64: buffer[idx3].imageBase64,
+        label: 'Step 2: Hand Movement (Trajecting upward to mouth)',
+      });
+      capturedFramesRef.current.push({
+        timestamp: buffer[idx4].timestamp,
+        imageBase64: buffer[idx4].imageBase64,
+        label: 'Step 3: Mouth Ingestion (Oral placement & intake)',
+      });
+      capturedFramesRef.current.push({
+        timestamp: buffer[idx5].timestamp,
+        imageBase64: buffer[idx5].imageBase64,
+        label: 'Step 3b: Swallow & Hand Withdrawal',
+      });
+      capturedFramesRef.current.push({
+        timestamp: buffer[idx6].timestamp,
+        imageBase64: buffer[idx6].imageBase64,
+        label: 'Step 4: Clean Empty Hand (Open palm confirmation)',
+      });
+    }
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -500,11 +1067,13 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
         body: JSON.stringify({
           videoBase64: base64Data,
           keyFrames: capturedFramesRef.current,
+          realtimeEvents: realtimeEventsDoneRef.current,
+          realtimeTimestamps: realtimeTimestampsRef.current,
           mimeType: mimeType || blob.type || 'video/webm',
           expectedMedicineName: patient.medicationName,
           patientName: patient.fullName,
           doseSlot: slot,
-          providerPreference: selectedAiProvider,
+          providerPreference: 'auto',
         }),
       });
 
@@ -517,40 +1086,10 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
         throw new Error(`Server returned HTTP ${response.status}`);
       }
 
+      // DIRECT VERIFICATION RESULT:
+      // Zero assumptions or synthetic overrides. The AI Vision model and CV engine
+      // determine true physical status directly from the visual evidence.
       const result: VerificationResult = await response.json();
-
-      // Clinical normalization: if mouth interaction occurred, hand gesture to mouth is logically verified
-      if (result && result.events) {
-        if (result.events.mouth_interaction) {
-          result.events.medicine_to_mouth = true;
-          if (!result.timestamps.medicine_to_mouth) {
-            result.timestamps.medicine_to_mouth = result.timestamps.mouth_interaction || '00:06';
-          }
-        }
-        if (result.events.medicine_detected && result.events.hand_empty) {
-          if (result.events.medicine_to_mouth || result.events.mouth_interaction) {
-            result.events.medicine_to_mouth = true;
-            result.events.mouth_interaction = true;
-          }
-        }
-        if (
-          result.events.medicine_detected &&
-          result.events.medicine_to_mouth &&
-          result.events.mouth_interaction &&
-          result.events.hand_empty
-        ) {
-          result.status = 'MEDICINE_TAKEN';
-          result.verified = true;
-          result.sequence_valid = true;
-          result.failed_step = null;
-          if (!result.message || result.message.includes('failed')) {
-            result.message = 'Medicine intake verified successfully. Hand gesture, mouth ingestion, and empty hand confirmed.';
-          }
-        }
-        if (result.events.medicine_to_mouth && result.failed_step === 'medicine_to_mouth') {
-          result.failed_step = null;
-        }
-      }
 
       setVerificationResult(result);
       setPhase('video_review');
@@ -561,42 +1100,61 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
       clearTimeout(t3);
       clearTimeout(t4);
 
-      // Intelligent deterministic fallback
+      // Deterministic fallback respecting physical frame reality
+      const pillDetected = realtimeEventsDoneRef.current.medicine_detected;
+      const handToMouth = realtimeEventsDoneRef.current.medicine_to_mouth;
+      const mouthInteraction = realtimeEventsDoneRef.current.mouth_interaction;
+      const handEmpty = realtimeEventsDoneRef.current.hand_empty;
+      const waterTaken = realtimeEventsDoneRef.current.water_intake;
+      const isVerified = pillDetected && handToMouth && mouthInteraction && handEmpty;
+
+      let failedStep: string | null = null;
+      if (!pillDetected) failedStep = 'medicine_detected';
+      else if (!handToMouth) failedStep = 'medicine_to_mouth';
+      else if (!mouthInteraction) failedStep = 'mouth_interaction';
+      else if (!handEmpty) failedStep = 'hand_empty';
+
       const fallbackResult: VerificationResult = {
-        status: 'MEDICINE_TAKEN',
-        verified: true,
-        confidence: 0.94,
-        sequence_valid: true,
+        status: isVerified ? 'MEDICINE_TAKEN' : 'MEDICINE_NOT_TAKEN',
+        verified: isVerified,
+        confidence: isVerified ? 0.95 : 0.42,
+        sequence_valid: isVerified,
         events: {
-          medicine_detected: true,
-          medicine_to_mouth: true,
-          mouth_interaction: true,
-          hand_empty: true,
-          water_intake: true,
+          medicine_detected: pillDetected,
+          medicine_to_mouth: handToMouth,
+          mouth_interaction: mouthInteraction,
+          hand_empty: handEmpty,
+          water_intake: waterTaken,
         },
         timestamps: {
-          medicine_detected: '00:03',
-          medicine_to_mouth: '00:08',
-          mouth_interaction: '00:10',
-          hand_empty: '00:14',
-          water_intake: '00:17',
+          medicine_detected: realtimeTimestampsRef.current.medicine_detected || (pillDetected ? '00:03' : null),
+          medicine_to_mouth: realtimeTimestampsRef.current.medicine_to_mouth || (handToMouth ? '00:07' : null),
+          mouth_interaction: realtimeTimestampsRef.current.mouth_interaction || (mouthInteraction ? '00:09' : null),
+          hand_empty: realtimeTimestampsRef.current.hand_empty || (handEmpty ? '00:13' : null),
+          water_intake: realtimeTimestampsRef.current.water_intake || (waterTaken ? '00:16' : null),
         },
         step_confidences: {
-          medicine_confidence: 0.96,
-          hand_to_mouth_confidence: 0.95,
-          mouth_interaction_confidence: 0.92,
-          hand_empty_confidence: 0.94,
-          water_confidence: 0.88,
+          medicine_confidence: pillDetected ? 0.95 : 0.35,
+          hand_to_mouth_confidence: handToMouth ? 0.94 : 0.40,
+          mouth_interaction_confidence: mouthInteraction ? 0.93 : 0.35,
+          hand_empty_confidence: handEmpty ? 0.95 : 0.40,
+          water_confidence: waterTaken ? 0.88 : 0.30,
         },
         medicine_details: {
           detected_name: patient.medicationName,
-          appearance: 'Solid oral medication tablet in palm',
-          confidence: 0.93,
-          notes: 'Medicine detected in patient palm and moved to mouth in clear camera view.',
+          appearance: pillDetected ? 'Solid oral medication tablet' : 'No medicine detected (empty hand)',
+          confidence: pillDetected ? 0.94 : 0.35,
+          notes: isVerified 
+            ? 'All 4 mandatory steps confirmed: medicine in hand, hand to mouth, mouth ingestion, and clean empty hand.' 
+            : `Verification halted: ${failedStep || 'missing action'}.`,
         },
-        failed_step: null,
-        explanation: 'Medicine detected in hand (00:03) → hand gesture to mouth (00:08) → mouth interaction verified (00:10) → hand confirmed empty (00:14) → water intake detected (optional) → Medicine Taken.',
-        message: 'Medicine intake verified successfully across all required temporal steps.',
+        failed_step: failedStep,
+        explanation: isVerified
+          ? '1. Medicine detected in hand → 2. Hand gesture to mouth → 3. Mouth ingestion verified → 4. Clean empty hand verified → Result: MEDICINE_TAKEN.'
+          : `Verification failed at ${failedStep || 'clinical sequence'}: Required physical action was not verified.`,
+        message: isVerified
+          ? 'Medicine intake verified successfully across all mandatory steps.'
+          : `Medication not verified: ${failedStep === 'medicine_detected' ? 'Hand was empty. No pill was held in hand.' : failedStep === 'medicine_to_mouth' ? 'Hand gesture to mouth was not detected.' : failedStep === 'mouth_interaction' ? 'Ingestion into mouth cavity was not observed.' : 'Clean empty hand was not confirmed.'}`,
       };
 
       setVerificationResult(fallbackResult);
@@ -608,46 +1166,65 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
     setPhase('analyzing');
     setAnalysisStepText('Analyzing medicine ingestion sequence...');
     setTimeout(() => {
+      const pillDetected = realtimeEventsDoneRef.current.medicine_detected;
+      const handToMouth = realtimeEventsDoneRef.current.medicine_to_mouth;
+      const mouthInteraction = realtimeEventsDoneRef.current.mouth_interaction;
+      const handEmpty = realtimeEventsDoneRef.current.hand_empty;
+      const waterTaken = realtimeEventsDoneRef.current.water_intake;
+      const isVerified = pillDetected && handToMouth && mouthInteraction && handEmpty;
+
+      let failedStep: string | null = null;
+      if (!pillDetected) failedStep = 'medicine_detected';
+      else if (!handToMouth) failedStep = 'medicine_to_mouth';
+      else if (!mouthInteraction) failedStep = 'mouth_interaction';
+      else if (!handEmpty) failedStep = 'hand_empty';
+
       const syntheticResult: VerificationResult = {
-        status: 'MEDICINE_TAKEN',
-        verified: true,
-        confidence: 0.95,
-        sequence_valid: true,
+        status: isVerified ? 'MEDICINE_TAKEN' : 'MEDICINE_NOT_TAKEN',
+        verified: isVerified,
+        confidence: isVerified ? 0.95 : 0.42,
+        sequence_valid: isVerified,
         events: {
-          medicine_detected: true,
-          medicine_to_mouth: true,
-          mouth_interaction: true,
-          hand_empty: true,
-          water_intake: true,
+          medicine_detected: pillDetected,
+          medicine_to_mouth: handToMouth,
+          mouth_interaction: mouthInteraction,
+          hand_empty: handEmpty,
+          water_intake: waterTaken,
         },
         timestamps: {
-          medicine_detected: '00:03',
-          medicine_to_mouth: '00:08',
-          mouth_interaction: '00:11',
-          hand_empty: '00:15',
-          water_intake: '00:18',
+          medicine_detected: realtimeTimestampsRef.current.medicine_detected || (pillDetected ? '00:03' : null),
+          medicine_to_mouth: realtimeTimestampsRef.current.medicine_to_mouth || (handToMouth ? '00:07' : null),
+          mouth_interaction: realtimeTimestampsRef.current.mouth_interaction || (mouthInteraction ? '00:09' : null),
+          hand_empty: realtimeTimestampsRef.current.hand_empty || (handEmpty ? '00:13' : null),
+          water_intake: realtimeTimestampsRef.current.water_intake || (waterTaken ? '00:16' : null),
         },
         step_confidences: {
-          medicine_confidence: 0.96,
-          hand_to_mouth_confidence: 0.95,
-          mouth_interaction_confidence: 0.94,
-          hand_empty_confidence: 0.95,
-          water_confidence: 0.89,
+          medicine_confidence: pillDetected ? 0.95 : 0.35,
+          hand_to_mouth_confidence: handToMouth ? 0.94 : 0.40,
+          mouth_interaction_confidence: mouthInteraction ? 0.93 : 0.35,
+          hand_empty_confidence: handEmpty ? 0.95 : 0.40,
+          water_confidence: waterTaken ? 0.88 : 0.30,
         },
         medicine_details: {
           detected_name: patient.medicationName,
-          appearance: 'Oral solid dose in patient palm',
-          confidence: 0.93,
-          notes: 'Tablet positioned and transferred to mouth in sequential chronological order.',
+          appearance: pillDetected ? 'Solid oral medication tablet' : 'No medicine detected (empty hand)',
+          confidence: pillDetected ? 0.94 : 0.35,
+          notes: isVerified 
+            ? 'All 4 mandatory steps confirmed: medicine in hand, hand to mouth, mouth ingestion, and clean empty hand.' 
+            : `Verification halted: ${failedStep || 'missing action'}.`,
         },
-        failed_step: null,
-        explanation: 'Medicine detected in hand (00:03) → mouth interaction verified (00:08) → hand empty (00:15) → water intake detected (00:18, optional) → Medicine Taken.',
-        message: 'Medicine intake verified successfully across all required temporal steps.',
+        failed_step: failedStep,
+        explanation: isVerified
+          ? '1. Medicine detected in hand → 2. Hand gesture to mouth → 3. Mouth ingestion verified → 4. Clean empty hand verified → Result: MEDICINE_TAKEN.'
+          : `Verification failed at ${failedStep || 'clinical sequence'}: Required physical action was not observed.`,
+        message: isVerified
+          ? 'Medicine intake verified successfully across all mandatory steps.'
+          : `Medication not verified: ${failedStep === 'medicine_detected' ? 'Hand was empty. No pill was held in hand.' : failedStep === 'medicine_to_mouth' ? 'Hand gesture to mouth was not detected.' : failedStep === 'mouth_interaction' ? 'Ingestion into mouth cavity was not observed.' : 'Clean empty hand was not confirmed.'}`,
       };
 
       setVerificationResult(syntheticResult);
       setPhase('video_review');
-    }, 2200);
+    }, 1800);
   };
 
   // Video File Upload Handler
@@ -772,74 +1349,336 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
         {/* ======================================================== */}
         {/* PHASE 1: PILLBOX HARDWARE TELEMETRY                      */}
         {/* ======================================================== */}
+        {/* ======================================================== */}
+        {/* PHASE 1: PILLBOX HARDWARE TELEMETRY & SENSOR MONITOR     */}
+        {/* ======================================================== */}
         {phase === 'pillbox_verification' && (
-          <div className="space-y-5 py-2 text-center animate-in fade-in duration-200">
-            <div className="relative w-20 h-20 mx-auto flex items-center justify-center">
-              <div className="absolute inset-0 rounded-full bg-teal-100 animate-ping opacity-30" />
-              <div className="w-18 h-18 rounded-2xl bg-teal-50 border-2 border-teal-500 text-teal-700 flex items-center justify-center shadow-lg">
-                <Wifi className="w-8 h-8 animate-pulse text-teal-600" />
+          <div className="space-y-5 animate-in fade-in duration-200">
+            {/* Pillbox Status Header Card */}
+            <div className="p-4 rounded-2xl bg-gradient-to-r from-teal-500/10 via-cyan-500/10 to-teal-500/5 border border-teal-200/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-left">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-xl bg-teal-600 text-white flex items-center justify-center shadow-md shadow-teal-700/20 shrink-0">
+                  <Cpu className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-slate-900 text-sm">
+                      Smart Pillbox {patient.pillboxId || 'DSBOX-01'}
+                    </span>
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                      ESP32 Online
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Patient: <strong>{patient.fullName}</strong> ({patient.id}) • Assigned Slot: <strong className="text-teal-700">{slot} Dose</strong> (Compartment {targetCompartmentNumber})
+                  </p>
+                </div>
+              </div>
+
+              {/* Wi-Fi & NTP telemetry pills */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono font-medium text-slate-600">
+                <span className="px-2 py-1 rounded-lg bg-white/80 border border-slate-200 flex items-center gap-1">
+                  <Wifi className="w-3 h-3 text-teal-600" />
+                  <span>{wifiSsid}</span>
+                </span>
+                <span className="px-2 py-1 rounded-lg bg-white/80 border border-slate-200 flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-cyan-600" />
+                  <span>NTP UTC+5:30</span>
+                </span>
               </div>
             </div>
 
-            <div className="space-y-1">
-              <h4 className="text-base sm:text-lg font-bold text-slate-900">
-                Pillbox Hardware Telemetry Verification
-              </h4>
-              <p className="text-xs text-slate-500 max-w-md mx-auto">
-                Syncing with smart pillbox device <strong className="font-mono text-teal-700">{patient.pillboxId}</strong> to verify compartment lid access.
-              </p>
-            </div>
-
-            {/* Step list */}
-            <div className="max-w-sm mx-auto space-y-2 text-left text-xs bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">ESP32 Device Ping:</span>
-                <span className="font-bold text-emerald-600 flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Connected
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Compartment Lid Access:</span>
-                <span className={`font-bold flex items-center gap-1 ${
-                  pillboxStep === 'connecting' 
-                    ? 'text-slate-400' 
-                    : 'text-emerald-600'
-                }`}>
-                  {pillboxStep === 'connecting' ? 'Detecting...' : (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Opened ({slot})
-                    </>
-                  )}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-600">Medicine Dispense Status:</span>
-                <span className={`font-bold flex items-center gap-1 ${
-                  pillboxStep === 'pill_retrieved' || pillboxStep === 'verified'
-                    ? 'text-emerald-600'
-                    : 'text-slate-400'
-                }`}>
-                  {pillboxStep === 'pill_retrieved' || pillboxStep === 'verified' ? (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Retrieved
-                    </>
+            {/* Hardware Live Telemetry Cards (LDR, Compartment, LED, Buzzer) */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
+              {/* LDR Sensor Reading */}
+              <div className={`p-3.5 rounded-2xl border transition-all ${
+                isLidOpened 
+                  ? 'bg-emerald-50/80 border-emerald-300 shadow-xs' 
+                  : 'bg-slate-50/80 border-slate-200'
+              }`}>
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold mb-1">
+                  <span>LDR {targetCompartmentNumber} (Pin {targetLdrPin})</span>
+                  <Lightbulb className={`w-3.5 h-3.5 ${isLidOpened ? 'text-amber-500' : 'text-slate-400'}`} />
+                </div>
+                <div className="text-lg font-black font-mono text-slate-900">
+                  {pillboxLdrValue} <span className="text-[10px] font-normal text-slate-500">/ 4095</span>
+                </div>
+                <div className="mt-1 flex items-center gap-1 text-[11px] font-bold">
+                  {isLidOpened ? (
+                    <span className="text-emerald-700 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                      LIGHT DETECTED (&gt;1000)
+                    </span>
                   ) : (
-                    'Waiting...'
+                    <span className="text-slate-600">
+                      🌑 DARK (&le;1000 Armed)
+                    </span>
                   )}
-                </span>
+                </div>
+              </div>
+
+              {/* Compartment Lid Status */}
+              <div className={`p-3.5 rounded-2xl border transition-all ${
+                isLidOpened 
+                  ? 'bg-emerald-50/80 border-emerald-300 shadow-xs' 
+                  : 'bg-amber-50/70 border-amber-200'
+              }`}>
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold mb-1">
+                  <span>Compartment {targetCompartmentNumber}</span>
+                  {isLidOpened ? <Unlock className="w-3.5 h-3.5 text-emerald-600" /> : <Lock className="w-3.5 h-3.5 text-amber-600" />}
+                </div>
+                <div className="text-lg font-black text-slate-900">
+                  {isLidOpened ? 'OPENED' : 'WAITING'}
+                </div>
+                <div className="mt-1 text-[11px] font-semibold text-slate-600 truncate">
+                  {isLidOpened ? 'Pill Retrieved ✓' : 'Awaiting patient opening'}
+                </div>
+              </div>
+
+              {/* LED Indicator Pin */}
+              <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200">
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold mb-1">
+                  <span>LED {targetCompartmentNumber} (Pin {targetLedPin})</span>
+                  <Radio className={`w-3.5 h-3.5 ${ledActive ? 'text-emerald-500 animate-pulse' : 'text-slate-300'}`} />
+                </div>
+                <div className="text-lg font-black font-mono">
+                  {ledActive ? (
+                    <span className="text-emerald-600 flex items-center gap-1">
+                      ON <span className="text-[10px] font-normal text-slate-500">(Blinking)</span>
+                    </span>
+                  ) : (
+                    <span className="text-slate-400">OFF</span>
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  {ledActive ? 'Guiding compartment' : 'Turned off on intake'}
+                </div>
+              </div>
+
+              {/* Buzzer Alarm Pin */}
+              <div className="p-3.5 rounded-2xl bg-slate-50/80 border border-slate-200">
+                <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold mb-1">
+                  <span>Buzzer (Pin {targetBuzzerPin})</span>
+                  {buzzerActive ? <Volume2 className="w-3.5 h-3.5 text-rose-500 animate-bounce" /> : <VolumeX className="w-3.5 h-3.5 text-slate-300" />}
+                </div>
+                <div className="text-lg font-black font-mono">
+                  {buzzerActive ? (
+                    <span className="text-rose-600">BEEPING</span>
+                  ) : (
+                    <span className="text-slate-400">MUTED</span>
+                  )}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-500">
+                  {buzzerActive ? '30-min window alert' : 'Silenced on dose take'}
+                </div>
               </div>
             </div>
 
-            <div className="pt-2 flex items-center justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => setPhase('video_capture')}
-                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5"
-              >
-                <span>Continue to Video Capture</span>
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
+            {/* Verification State Banner / Guidance */}
+            {isLidOpened ? (
+              <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-left flex items-start gap-3 animate-in fade-in duration-200">
+                <div className="p-2 rounded-xl bg-emerald-600 text-white shrink-0 mt-0.5">
+                  <CheckCircle2 className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <h5 className="text-sm font-bold text-emerald-950">
+                    Pillbox Hardware Verification Confirmed!
+                  </h5>
+                  <p className="text-xs text-emerald-800 mt-0.5">
+                    Compartment {targetCompartmentNumber} opened and light detected on LDR {targetLdrPin} ({pillboxLdrValue} &gt; 1000). The pill has been retrieved. Now proceed to 20-second AI Video Verification to confirm oral ingestion.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-2xl bg-sky-50 border border-sky-200 text-left flex items-start gap-3">
+                <div className="p-2 rounded-xl bg-teal-600 text-white shrink-0 mt-0.5">
+                  <Info className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <h5 className="text-sm font-bold text-slate-900">
+                    Step 1 of 3: Open Smart Pillbox Compartment {targetCompartmentNumber}
+                  </h5>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Your physical ESP32 box is currently sounding the buzzer and flashing LED {targetCompartmentNumber}. Please open Compartment {targetCompartmentNumber} to retrieve your {slot} medication. You can simulate the physical light sensor detection below.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons Bar */}
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+              <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                {!isLidOpened ? (
+                  <button
+                    type="button"
+                    id="simulate-open-pillbox-btn"
+                    onClick={handleOpenPillboxLid}
+                    className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 active:scale-95 text-white text-xs font-bold shadow-md shadow-teal-700/20 transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Unlock className="w-4 h-4" />
+                    <span>Open Compartment {targetCompartmentNumber} (Trigger Sensor)</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleResetPillboxLid}
+                    className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>Reset / Close Box</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowSerialTerminal(!showSerialTerminal)}
+                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                    showSerialTerminal 
+                      ? 'bg-slate-900 text-white border-slate-900' 
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                  title="Toggle ESP32 Serial Telemetry Terminal"
+                >
+                  <Terminal className="w-3.5 h-3.5 text-teal-500" />
+                  <span className="hidden sm:inline">ESP32 Serial Log</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="view-patient-esp32-code-btn"
+                  onClick={() => setShowFirmwareDrawer(!showFirmwareDrawer)}
+                  className={`px-3 py-2 rounded-xl text-xs font-semibold border transition-all flex items-center gap-1.5 cursor-pointer ${
+                    showFirmwareDrawer 
+                      ? 'bg-teal-700 text-white border-teal-700 shadow-sm' 
+                      : 'bg-teal-50 text-teal-800 border-teal-200 hover:bg-teal-100'
+                  }`}
+                  title="View Dynamic ESP32 Firmware for this Patient"
+                >
+                  <Code className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Dynamic ESP32 Code</span>
+                </button>
+              </div>
+
+              {/* Continue Button to Video Capture */}
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                {!isLidOpened && (
+                  <button
+                    type="button"
+                    onClick={() => setPhase('video_capture')}
+                    className="px-3 py-2 rounded-xl text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors cursor-pointer"
+                  >
+                    Skip to Video &rarr;
+                  </button>
+                )}
+                <button
+                  type="button"
+                  id="continue-to-video-capture-btn"
+                  onClick={() => setPhase('video_capture')}
+                  className={`w-full sm:w-auto px-5 py-2.5 rounded-xl text-xs font-bold shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                    isLidOpened 
+                      ? 'bg-gradient-to-r from-teal-600 to-emerald-600 hover:from-teal-700 hover:to-emerald-700 text-white shadow-emerald-700/25 scale-102 ring-2 ring-emerald-400/40' 
+                      : 'bg-teal-600 hover:bg-teal-700 text-white shadow-teal-700/20'
+                  }`}
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Proceed to AI Video Verification &rarr;</span>
+                </button>
+              </div>
             </div>
+
+            {/* Collapsible Serial Monitor Terminal */}
+            {showSerialTerminal && (
+              <div className="rounded-2xl bg-slate-950 text-slate-200 p-3.5 text-left border border-slate-800 font-mono text-[11px] space-y-1 max-h-48 overflow-y-auto animate-in fade-in duration-150">
+                <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-slate-800 text-slate-400 text-[10px]">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    ESP32 Serial Monitor (115200 baud)
+                  </span>
+                  <span>Target: LDR {targetCompartmentNumber} (Pin {targetLdrPin})</span>
+                </div>
+                {serialLogs.map((log, idx) => (
+                  <div key={idx} className={log.includes('TAKEN') || log.includes('LIGHT DETECTED') ? 'text-emerald-400 font-bold' : log.includes('ALERT') ? 'text-amber-300' : 'text-slate-300'}>
+                    {log}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Dynamic Patient ESP32 Firmware Drawer / Code Viewer */}
+            {showFirmwareDrawer && (
+              <div className="p-4 sm:p-5 rounded-2xl bg-slate-900 text-white border border-teal-500/40 shadow-xl text-left space-y-4 animate-in fade-in duration-200">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-800">
+                  <div>
+                    <h5 className="text-sm font-bold text-white flex items-center gap-2">
+                      <Code className="w-4 h-4 text-teal-400" />
+                      Dynamic ESP32 Arduino Firmware Code
+                    </h5>
+                    <p className="text-xs text-slate-400">
+                      Generated dynamically for <strong>{patient.fullName}</strong> ({patient.id}) with custom morning &amp; evening dose schedules.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyFirmware}
+                      className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                    >
+                      {copiedFirmware ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedFirmware ? 'Copied!' : 'Copy Code'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadFirmware}
+                      className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-teal-300 border border-teal-500/30 text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download .ino</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Wi-Fi & Schedule Config inputs */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 mb-1">Wi-Fi SSID</label>
+                    <input
+                      type="text"
+                      value={wifiSsid}
+                      onChange={(e) => setWifiSsid(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white font-mono text-xs focus:ring-1 focus:ring-teal-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 mb-1">Wi-Fi Password</label>
+                    <input
+                      type="text"
+                      value={wifiPass}
+                      onChange={(e) => setWifiPass(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white font-mono text-xs focus:ring-1 focus:ring-teal-500 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-400 mb-1">Dose Window</label>
+                    <div className="px-2.5 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-teal-400 font-mono text-xs">
+                      30 Minutes (Allowed)
+                    </div>
+                  </div>
+                </div>
+
+                {/* Arduino C++ Code Box */}
+                <div className="relative rounded-xl bg-slate-950 border border-slate-800 overflow-hidden">
+                  <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900 border-b border-slate-800 text-[10px] text-slate-400 font-mono">
+                    <span>dosesure_esp32_{patient.id}.ino (C++ Arduino)</span>
+                    <span>Ready to Flash in Arduino IDE</span>
+                  </div>
+                  <pre className="p-3 text-[11px] font-mono text-slate-300 max-h-56 overflow-y-auto whitespace-pre leading-relaxed select-all">
+                    {generatePatientESP32Code(patient, { ssid: wifiSsid, password: wifiPass })}
+                  </pre>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -896,33 +1735,6 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
                   )}
                 </div>
               )}
-            </div>
-
-            {/* AI Vision Engine Selector */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-              <div className="flex items-center gap-2">
-                <Cpu className="w-4 h-4 text-teal-600 shrink-0" />
-                <div>
-                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <span>AI Verification Model</span>
-                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-teal-100 text-teal-800 font-semibold">Trained Pill &amp; Gesture</span>
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    Tracks pill in hand, kinetic arm movement, mouth ingestion, and open empty palm
-                  </span>
-                </div>
-              </div>
-              <select
-                value={selectedAiProvider}
-                onChange={(e) => setSelectedAiProvider(e.target.value as any)}
-                className="text-xs font-semibold bg-white border border-slate-300 rounded-lg px-2.5 py-1 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500 cursor-pointer shadow-2xs shrink-0"
-              >
-                <option value="auto">🤖 Auto (Gemini 3.8 Vision + Clinical CV)</option>
-                <option value="gemini">✨ Gemini 3.8 Flash Multimodal</option>
-                <option value="openai">🧠 OpenAI GPT-4o Vision</option>
-                <option value="huggingface">🤗 Hugging Face ViT Vision</option>
-                <option value="computer_vision">🔬 Clinical CV &amp; Gesture Pipeline</option>
-              </select>
             </div>
 
             {/* MODE A: LIVE WEBCAM RECORDING */}
@@ -1001,6 +1813,20 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
                     />
                   </div>
                 </div>
+
+                {/* Real-time CV Scanning & Activity Checklist HUD */}
+                <RealtimeScanningOverlay
+                  isRecording={isRecording}
+                  recordingSecondsElapsed={recordingSecondsElapsed}
+                  medicationName={patient.medicationName}
+                  activities={realtimeActivities}
+                  eventsDone={realtimeEventsDone}
+                  timestamps={realtimeTimestamps}
+                  instruction={liveCoachInstruction}
+                  activityFeed={liveActivityFeed}
+                  onQuickMark={handleQuickMarkActivity}
+                  onFinishEarly={() => handleFinishRecording()}
+                />
 
                 {/* Status Notice or Camera Error if any */}
                 {cameraError && (
@@ -1154,9 +1980,16 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
                     <h4 className="text-base font-black text-emerald-900 tracking-tight">
                       MEDICINE TAKEN ✓
                     </h4>
-                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold border border-emerald-300">
-                      {Math.round(verificationResult.confidence * 100)}% Confidence
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[11px] font-bold border border-emerald-300">
+                        {Math.round(verificationResult.confidence * 100)}% Confidence
+                      </span>
+                      {verificationResult.model_used && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-700/10 text-emerald-900 text-[10px] font-bold border border-emerald-300">
+                          {verificationResult.model_used}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className="text-xs text-emerald-800 font-medium mt-0.5">
                     {verificationResult.message}
@@ -1175,9 +2008,16 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
                     <h4 className="text-base font-black text-rose-900 tracking-tight">
                       MEDICINE NOT TAKEN ✗
                     </h4>
-                    <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[11px] font-bold border border-rose-300">
-                      Failed: {verificationResult.failed_step || 'Incomplete Sequence'}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 text-[11px] font-bold border border-rose-300">
+                        Failed: {verificationResult.failed_step || 'Incomplete Sequence'}
+                      </span>
+                      {verificationResult.model_used && (
+                        <span className="px-2 py-0.5 rounded-full bg-rose-700/10 text-rose-900 text-[10px] font-bold border border-rose-300">
+                          {verificationResult.model_used}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className="text-xs text-rose-800 font-medium mt-0.5">
                     {verificationResult.message}
@@ -1196,9 +2036,16 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
                     <h4 className="text-base font-black text-amber-900 tracking-tight">
                       UNVERIFIED — RECORD AGAIN
                     </h4>
-                    <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold border border-amber-300">
-                      Low Confidence ({Math.round(verificationResult.confidence * 100)}%)
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold border border-amber-300">
+                        Low Confidence ({Math.round(verificationResult.confidence * 100)}%)
+                      </span>
+                      {verificationResult.model_used && (
+                        <span className="px-2 py-0.5 rounded-full bg-amber-700/10 text-amber-900 text-[10px] font-bold border border-amber-300">
+                          {verificationResult.model_used}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <p className="text-xs text-amber-800 font-medium mt-0.5">
                     {verificationResult.message}
@@ -1215,28 +2062,11 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
                   src={recordedVideoUrl}
                   controls
                   playsInline
+                  onTimeUpdate={(e) => setPlaybackCurrentSeconds((e.target as HTMLVideoElement).currentTime)}
                   className="w-full h-full object-cover"
                 />
               </div>
             )}
-
-            {/* AI Model Badge */}
-            <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-2xl bg-teal-50/80 border border-teal-200/80 text-xs">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-teal-600 text-white">
-                  <Cpu className="w-3.5 h-3.5" />
-                </div>
-                <div>
-                  <span className="text-[10px] uppercase font-bold text-teal-700 tracking-wider block">Evaluated by Clinical AI</span>
-                  <span className="font-extrabold text-slate-900 text-xs">
-                    {verificationResult.model_used || 'Gemini 3.8 Multimodal Vision'}
-                  </span>
-                </div>
-              </div>
-              <span className="px-2.5 py-1 rounded-full bg-white border border-teal-200 text-teal-800 text-[10px] font-mono font-bold shadow-2xs">
-                {verificationResult.ai_provider ? verificationResult.ai_provider.toUpperCase() : 'AI VISION'}
-              </span>
-            </div>
 
             {/* Pill & Dosage Visual Recognition Card */}
             {verificationResult.medicine_details && (
@@ -1274,167 +2104,11 @@ export const MedicationIntakeModal: React.FC<MedicationIntakeModalProps> = ({
               </div>
             )}
 
-            {/* Step-by-Step Chronological Verification Breakdown */}
-            <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-teal-600" />
-                  <span>Temporal Action Verification Breakdown</span>
-                </span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  Order: {verificationResult.sequence_valid ? 'Chronologically Valid' : 'Order Invalid'}
-                </span>
-              </div>
-
-              {/* Step 1: Medicine Detected */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2">
-                  {verificationResult.events.medicine_detected ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                  )}
-                  <div>
-                    <p className="font-bold text-slate-800">
-                      1. Medicine Detected in Hand <span className="text-rose-600 text-[10px] font-normal">(Required)</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      {verificationResult.medicine_details?.appearance ||
-                       (verificationResult.events.medicine_detected ? 'Pill/tablet identified in hand' : 'Medicine not confidently detected')}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-[11px] text-slate-700 block">
-                    {verificationResult.timestamps.medicine_detected || '—'}
-                  </span>
-                  {verificationResult.step_confidences?.medicine_confidence && (
-                    <span className="text-[10px] text-emerald-700 font-bold">
-                      {Math.round(verificationResult.step_confidences.medicine_confidence * 100)}%
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Step 2: Hand Gesture & Movement to Mouth */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2">
-                  {verificationResult.events.medicine_to_mouth ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                  )}
-                  <div>
-                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                      <span>2. Hand Gesture &amp; Movement to Mouth</span>
-                      <span className="text-rose-600 text-[10px] font-normal">(Required)</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      {verificationResult.events.medicine_to_mouth 
-                        ? 'Hand gesture bringing medicine up to mouth verified' 
-                        : 'Hand gesture bringing medicine to mouth not detected (ensure hand movement to lips is visible)'}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-[11px] text-slate-700 block">
-                    {verificationResult.timestamps.medicine_to_mouth || '—'}
-                  </span>
-                  {verificationResult.step_confidences?.hand_to_mouth_confidence && (
-                    <span className="text-[10px] text-emerald-700 font-bold">
-                      {Math.round(verificationResult.step_confidences.hand_to_mouth_confidence * 100)}%
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Step 3: Mouth Interaction */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2">
-                  {verificationResult.events.mouth_interaction ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                  )}
-                  <div>
-                    <p className="font-bold text-slate-800">
-                      3. Mouth Interaction &amp; Ingestion <span className="text-rose-600 text-[10px] font-normal">(Required)</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      {verificationResult.events.mouth_interaction ? 'Medicine entered mouth (not just held nearby)' : 'No clear mouth entry'}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-[11px] text-slate-700 block">
-                    {verificationResult.timestamps.mouth_interaction || '—'}
-                  </span>
-                  {verificationResult.step_confidences?.mouth_interaction_confidence && (
-                    <span className="text-[10px] text-emerald-700 font-bold">
-                      {Math.round(verificationResult.step_confidences.mouth_interaction_confidence * 100)}%
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Step 4: Empty Hand */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="flex items-start gap-2">
-                  {verificationResult.events.hand_empty ? (
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
-                  ) : (
-                    <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-                  )}
-                  <div>
-                    <p className="font-bold text-slate-800">
-                      4. Post-Action Hand Empty Verification <span className="text-rose-600 text-[10px] font-normal">(Required)</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      {verificationResult.events.hand_empty ? 'Hand confirmed empty (not palmed, concealed or dropped)' : 'Hand remained occupied or concealed'}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-[11px] text-slate-700 block">
-                    {verificationResult.timestamps.hand_empty || '—'}
-                  </span>
-                  {verificationResult.step_confidences?.hand_empty_confidence && (
-                    <span className="text-[10px] text-emerald-700 font-bold">
-                      {Math.round(verificationResult.step_confidences.hand_empty_confidence * 100)}%
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Step 5: Water Intake (OPTIONAL) */}
-              <div className="flex items-start justify-between gap-2 pt-1 border-t border-slate-200">
-                <div className="flex items-start gap-2">
-                  <Droplets className={`w-4 h-4 mt-0.5 shrink-0 ${verificationResult.events.water_intake ? 'text-blue-600' : 'text-slate-400'}`} />
-                  <div>
-                    <p className="font-bold text-slate-800 flex items-center gap-1.5">
-                      <span>5. Water Intake</span>
-                      <span className="px-1.5 py-0.2 rounded bg-slate-200 text-slate-700 text-[10px] font-medium">OPTIONAL</span>
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      {verificationResult.events.water_intake
-                        ? 'Water drinking motion observed after medicine'
-                        : 'Water intake not observed (optional — does not invalidate intake)'}
-                    </p>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <span className="font-mono text-[11px] text-slate-700 block">
-                    {verificationResult.timestamps.water_intake || 'N/A'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
             {/* Explanation Summary */}
             <div className="p-3.5 rounded-xl bg-teal-50/70 border border-teal-200 text-[11px] space-y-1">
               <span className="font-bold text-teal-950 flex items-center gap-1">
                 <Info className="w-3.5 h-3.5 text-teal-600" />
-                <span>AI Verification Sequence Log:</span>
+                <span>Verification Sequence Log:</span>
               </span>
               <p className="text-slate-700 font-mono leading-relaxed pl-4">
                 {verificationResult.explanation}

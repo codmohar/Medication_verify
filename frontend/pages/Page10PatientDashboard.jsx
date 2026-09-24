@@ -1,10 +1,4 @@
 import React, { useState } from 'react';
-import { 
-  Patient, 
-  ActivePage, 
-  DoseSlot,
-  VerificationResult
-} from '../types';
 import { DoseCard } from '../components/DoseCard';
 import { MedicationIntakeModal } from '../components/MedicationIntakeModal';
 import { 
@@ -24,22 +18,15 @@ import {
   Video
 } from 'lucide-react';
 
-interface Page10PatientDashboardProps {
-  patient: Patient;
-  onNavigate: (page: ActivePage) => void;
-  onTakeDoseAction: (patientId: string, slot: string, verificationResult?: VerificationResult) => void;
-  onLogout: () => void;
-}
-
-export const Page10PatientDashboard: React.FC<Page10PatientDashboardProps> = ({
+export const Page10PatientDashboard = ({
   patient,
   onNavigate,
   onTakeDoseAction,
   onLogout,
 }) => {
-  const [selectedSlotForIntake, setSelectedSlotForIntake] = useState<DoseSlot | null>(null);
+  const [selectedSlotForIntake, setSelectedSlotForIntake] = useState(null);
 
-  const handleOpenDoseIntake = (slot: DoseSlot) => {
+  const handleOpenDoseIntake = (slot) => {
     setSelectedSlotForIntake(slot);
   };
 
@@ -47,14 +34,14 @@ export const Page10PatientDashboard: React.FC<Page10PatientDashboardProps> = ({
     setSelectedSlotForIntake(null);
   };
 
-  const handleCompleteDose = (slot: DoseSlot, videoBlob?: Blob, verificationResult?: VerificationResult) => {
+  const handleCompleteDose = (slot, videoBlob, verificationResult) => {
     onTakeDoseAction(patient.id, slot, verificationResult);
     setSelectedSlotForIntake(null);
   };
 
   // Find first pending dose or default to Evening
   const pendingDose = patient.todayDoses.find((d) => d.timingStatus === 'PENDING');
-  const fallbackSlot: DoseSlot = pendingDose ? pendingDose.slot : 'Evening';
+  const fallbackSlot = pendingDose ? pendingDose.slot : 'Evening';
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-12">

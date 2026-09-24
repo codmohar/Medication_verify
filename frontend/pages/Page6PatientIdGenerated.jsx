@@ -10,16 +10,9 @@ import {
   Sparkles,
   Check
 } from 'lucide-react';
-import { Patient, ActivePage } from '../types';
 import { PrintablePatientCard } from '../components/PrintablePatientCard';
 
-interface Page6PatientIdGeneratedProps {
-  patient: Patient;
-  onNavigate: (page: ActivePage) => void;
-  onViewProfile: (patient: Patient) => void;
-}
-
-export const Page6PatientIdGenerated: React.FC<Page6PatientIdGeneratedProps> = ({
+export const Page6PatientIdGenerated = ({
   patient,
   onNavigate,
   onViewProfile,

@@ -1,14 +1,7 @@
 import React, { useState } from 'react';
 import { User, KeyRound, ArrowRight, Pill, ShieldCheck, ArrowLeft, HelpCircle } from 'lucide-react';
-import { ActivePage, Patient } from '../types';
 
-interface Page9PatientLoginProps {
-  patients: Patient[];
-  onNavigate: (page: ActivePage) => void;
-  onPatientLoginSuccess: (patient: Patient) => void;
-}
-
-export const Page9PatientLogin: React.FC<Page9PatientLoginProps> = ({
+export const Page9PatientLogin = ({
   patients,
   onNavigate,
   onPatientLoginSuccess,
@@ -18,7 +11,7 @@ export const Page9PatientLogin: React.FC<Page9PatientLoginProps> = ({
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = (e) => {
     e.preventDefault();
     setError('');
 
@@ -47,7 +40,7 @@ export const Page9PatientLogin: React.FC<Page9PatientLoginProps> = ({
     }, 400);
   };
 
-  const handleUseDemo = (demoId: string) => {
+  const handleUseDemo = (demoId) => {
     const matched = patients.find((p) => p.id === demoId) || patients[0];
     if (matched) {
       setPatientId(matched.id);

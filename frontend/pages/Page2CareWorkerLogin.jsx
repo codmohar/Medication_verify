@@ -1,14 +1,8 @@
 import React, { useState } from 'react';
 import { Stethoscope, Lock, Mail, Eye, EyeOff, ArrowRight, ShieldCheck, ArrowLeft } from 'lucide-react';
-import { ActivePage, CareWorker } from '../types';
 import { CURRENT_CARE_WORKER } from '../data/mockData';
 
-interface Page2CareWorkerLoginProps {
-  onNavigate: (page: ActivePage) => void;
-  onLoginSuccess: (cw: CareWorker) => void;
-}
-
-export const Page2CareWorkerLogin: React.FC<Page2CareWorkerLoginProps> = ({
+export const Page2CareWorkerLogin = ({
   onNavigate,
   onLoginSuccess,
 }) => {
@@ -18,7 +12,7 @@ export const Page2CareWorkerLogin: React.FC<Page2CareWorkerLoginProps> = ({
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (!identifier.trim()) {
       setError('Please enter your Care Worker ID or Email');
@@ -36,7 +30,7 @@ export const Page2CareWorkerLogin: React.FC<Page2CareWorkerLoginProps> = ({
     }, 400);
   };
 
-  const handleUseDemo = (id: string) => {
+  const handleUseDemo = (id) => {
     setIdentifier(id);
     setPassword('demoSecurePass2026!');
     setError('');

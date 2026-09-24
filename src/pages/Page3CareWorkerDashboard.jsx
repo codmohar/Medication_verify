@@ -1,5 +1,4 @@
 import React from 'react';
-import { CareWorker, Patient, Alert, ActivePage } from '../types';
 import { 
   Users, 
   CheckCircle2, 
@@ -18,15 +17,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { VerificationBadge } from '../components/VerificationBadge';
 import { AdherenceChart } from '../components/AdherenceChart';
 
-interface Page3CareWorkerDashboardProps {
-  careWorker: CareWorker;
-  patients: Patient[];
-  alerts: Alert[];
-  onNavigate: (page: ActivePage) => void;
-  onSelectPatient: (patient: Patient) => void;
-}
-
-export const Page3CareWorkerDashboard: React.FC<Page3CareWorkerDashboardProps> = ({
+export const Page3CareWorkerDashboard = ({
   careWorker,
   patients,
   alerts,

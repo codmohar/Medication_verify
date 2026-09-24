@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Patient, ActivePage, DoseRecord } from '../types';
 import { PatientProfileHeader } from '../components/PatientProfileHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { VerificationBadge } from '../components/VerificationBadge';
@@ -21,13 +20,7 @@ import {
 } from 'lucide-react';
 import { generateWhatsAppMessage } from '../utils/helpers';
 
-interface Page7PatientProfileProps {
-  patient: Patient;
-  onBack: () => void;
-  onNavigate: (page: ActivePage) => void;
-}
-
-export const Page7PatientProfile: React.FC<Page7PatientProfileProps> = ({
+export const Page7PatientProfile = ({
   patient,
   onBack,
   onNavigate,
@@ -238,10 +231,11 @@ export const Page7PatientProfile: React.FC<Page7PatientProfileProps> = ({
         </div>
       </div>
 
-      {/* Device Status Card */}
+      {/* Device Status Card with Dynamic ESP32 Firmware */}
       <DeviceStatusCard 
         device={patient.deviceStatusDetails} 
-        verificationMethod={patient.verificationMethod} 
+        verificationMethod={patient.verificationMethod}
+        patient={patient}
       />
 
       {/* Dose History Table */}

@@ -1,14 +1,4 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  ActivePage, 
-  Patient, 
-  CareWorker, 
-  Alert, 
-  DoseRecord, 
-  TimingStatus, 
-  VerificationEvidence,
-  VerificationResult
-} from './types';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   getStoredPatients as getInitialPatients, 
   saveStoredPatients as savePatients, 
@@ -21,7 +11,7 @@ import { BackgroundOverlay } from './components/BackgroundOverlay';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
 
-// 12 Functional Pages
+// 12 Functional Pages (Converted to JSX)
 import { Page1Landing } from './pages/Page1Landing';
 import { Page2CareWorkerLogin } from './pages/Page2CareWorkerLogin';
 import { Page3CareWorkerDashboard } from './pages/Page3CareWorkerDashboard';
@@ -35,17 +25,102 @@ import { Page10PatientDashboard } from './pages/Page10PatientDashboard';
 import { Page11PatientDoseHistory } from './pages/Page11PatientDoseHistory';
 import { Page12Reports } from './pages/Page12Reports';
 
-import { Layers, ChevronUp, ChevronDown, CheckCircle2 } from 'lucide-react';
+import { Home } from 'lucide-react';
+
+// Route slug mapping for standard web browser URL history & Chrome Back/Forward arrow navigation
+const ROUTE_MAP = {
+  page1_landing: 'landing',
+  page2_cw_login: 'care-worker-login',
+  page3_cw_dashboard: 'dashboard',
+  page4_patients: 'patients',
+  page5_add_patient: 'add-patient',
+  page6_patient_id: 'patient-id',
+  page7_patient_profile: 'patient-profile',
+  page8_alert_centre: 'alerts',
+  page9_patient_login: 'patient-login',
+  page10_patient_dashboard: 'patient-dashboard',
+  page11_patient_history: 'patient-history',
+  page12_reports: 'reports',
+};
+
+const REVERSE_ROUTE_MAP = Object.fromEntries(
+  Object.entries(ROUTE_MAP).map(([pageId, slug]) => [slug, pageId])
+);
+
+function getPageFromHash(hash) {
+  const clean = (hash || '').replace(/^#\/?/, '').trim();
+  if (!clean) return 'page1_landing';
+  if (ROUTE_MAP[clean]) return clean;
+  if (REVERSE_ROUTE_MAP[clean]) return REVERSE_ROUTE_MAP[clean];
+  return 'page1_landing';
+}
+
+function getHashFromPage(pageId) {
+  return ROUTE_MAP[pageId] || pageId || 'landing';
+}
 
 export default function App() {
-  const [activePage, setActivePage] = useState<ActivePage>('page1_landing');
-  const [patients, setPatients] = useState<Patient[]>(() => getInitialPatients());
-  const [alerts, setAlerts] = useState<Alert[]>(INITIAL_ALERTS);
-  const [careWorker, setCareWorker] = useState<CareWorker>(CURRENT_CARE_WORKER);
-  const [selectedPatient, setSelectedPatient] = useState<Patient>(() => getInitialPatients()[0]);
-  const [currentPatientUser, setCurrentPatientUser] = useState<Patient>(() => getInitialPatients()[0]);
-  const [newlyRegisteredPatient, setNewlyRegisteredPatient] = useState<Patient | null>(null);
-  const [showPageSwitcher, setShowPageSwitcher] = useState(false);
+  const [activePage, setActivePageState] = useState(() => {
+    if (typeof window !== 'undefined' && window.location.hash) {
+      return getPageFromHash(window.location.hash);
+    }
+    return 'page1_landing';
+  });
+
+  const [patients, setPatients] = useState(() => getInitialPatients());
+  const [alerts, setAlerts] = useState(INITIAL_ALERTS);
+  const [careWorker, setCareWorker] = useState(CURRENT_CARE_WORKER);
+  const [selectedPatient, setSelectedPatient] = useState(() => getInitialPatients()[0]);
+  const [currentPatientUser, setCurrentPatientUser] = useState(() => getInitialPatients()[0]);
+  const [newlyRegisteredPatient, setNewlyRegisteredPatient] = useState(null);
+
+  // Navigate to a new page and record it in browser history for Chrome Back/Forward arrows
+  const navigateToPage = useCallback((newPage, replace = false) => {
+    setActivePageState(newPage);
+    const slug = getHashFromPage(newPage);
+    if (typeof window !== 'undefined') {
+      const currentClean = (window.location.hash || '').replace(/^#\/?/, '');
+      if (currentClean !== slug) {
+        if (replace) {
+          window.history.replaceState({ page: newPage }, '', `#${slug}`);
+        } else {
+          window.history.pushState({ page: newPage }, '', `#${slug}`);
+        }
+      }
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, []);
+
+  const setActivePage = navigateToPage;
+
+  // Listen to Chrome Back & Forward browser arrow navigation (popstate & hashchange)
+  useEffect(() => {
+    const handlePopState = (event) => {
+      const targetPage = event.state?.page || getPageFromHash(window.location.hash);
+      setActivePageState(targetPage);
+    };
+
+    const handleHashChange = () => {
+      const targetPage = getPageFromHash(window.location.hash);
+      setActivePageState(targetPage);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    window.addEventListener('hashchange', handleHashChange);
+
+    // Synchronize initial URL hash if empty
+    if (typeof window !== 'undefined') {
+      const initialSlug = getHashFromPage(activePage);
+      if (!window.location.hash || window.location.hash === '#' || window.location.hash === '#/') {
+        window.history.replaceState({ page: activePage }, '', `#${initialSlug}`);
+      }
+    }
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+      window.removeEventListener('hashchange', handleHashChange);
+    };
+  }, [activePage]);
 
   // Sync patients changes to persistence helper
   useEffect(() => {
@@ -53,12 +128,12 @@ export default function App() {
   }, [patients]);
 
   // Handle Care Worker selecting a patient to view full profile
-  const handleSelectPatient = (patient: Patient) => {
+  const handleSelectPatient = (patient) => {
     setSelectedPatient(patient);
     setActivePage('page7_patient_profile');
   };
 
-  const handleSelectPatientById = (patientId: string) => {
+  const handleSelectPatientById = (patientId) => {
     const found = patients.find((p) => p.id === patientId);
     if (found) {
       setSelectedPatient(found);
@@ -67,7 +142,7 @@ export default function App() {
   };
 
   // Handle successful registration in Page 5
-  const handleRegisterSuccess = (newPatient: Patient) => {
+  const handleRegisterSuccess = (newPatient) => {
     const updated = [newPatient, ...patients];
     setPatients(updated);
     setNewlyRegisteredPatient(newPatient);
@@ -76,7 +151,7 @@ export default function App() {
   };
 
   // Handle Patient taking dose simulation on Page 10
-  const handleTakeDoseAction = (patientId: string, slot: string, verificationResult?: VerificationResult) => {
+  const handleTakeDoseAction = (patientId, slot, verificationResult) => {
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const todayDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
@@ -85,8 +160,8 @@ export default function App() {
         if (p.id !== patientId) return p;
 
         const isVerified = verificationResult ? verificationResult.verified : true;
-        const evidenceStatus: VerificationEvidence = isVerified ? 'INGESTION_CONSISTENT' : 'UNVERIFIED';
-        const timingStatus: TimingStatus = isVerified ? 'ON_TIME' : 'MISSED';
+        const evidenceStatus = isVerified ? 'INGESTION_CONSISTENT' : 'UNVERIFIED';
+        const timingStatus = isVerified ? 'ON_TIME' : 'MISSED';
         const logNotes = verificationResult 
           ? `AI Video Verification: ${verificationResult.explanation} (Confidence: ${Math.round(verificationResult.confidence * 100)}%)`
           : 'Dose verified via smart pillbox access and AI temporal video ingestion analysis.';
@@ -103,12 +178,12 @@ export default function App() {
           return d;
         });
 
-        const newRecord: DoseRecord = {
+        const newRecord = {
           id: `rec-${Date.now()}`,
           date: todayDate,
           scheduledTime: slot === 'Morning' ? '08:00 AM' : '08:00 PM',
           eventTime: nowTime,
-          doseSlot: slot as any,
+          doseSlot: slot,
           timingStatus: timingStatus,
           verificationEvidence: evidenceStatus,
           deviceId: p.pillboxId,
@@ -123,7 +198,7 @@ export default function App() {
           ? Math.min(100, Math.round(((p.adherencePercentage * 10) + 100) / 11))
           : Math.max(0, Math.round((p.adherencePercentage * 10) / 11));
 
-        const updatedPatient: Patient = {
+        const updatedPatient = {
           ...p,
           status: 'On Track',
           currentStreakDays: newStreak,
@@ -142,7 +217,7 @@ export default function App() {
   };
 
   // Handle reviewing alert in Page 8
-  const handleToggleReviewAlert = (alertId: string) => {
+  const handleToggleReviewAlert = (alertId) => {
     setAlerts((prev) =>
       prev.map((a) => (a.id === alertId ? { ...a, isReviewed: !a.isReviewed } : a))
     );
@@ -160,21 +235,6 @@ export default function App() {
 
   // Unreviewed alert counter for sidebar & navbar
   const unreviewedAlertCount = alerts.filter((a) => !a.isReviewed).length;
-
-  const pageDirectory: { id: ActivePage; number: number; name: string; category: string }[] = [
-    { id: 'page1_landing', number: 1, name: 'Role Selection / Landing', category: 'General' },
-    { id: 'page2_cw_login', number: 2, name: 'Care Worker Login', category: 'Care Worker' },
-    { id: 'page3_cw_dashboard', number: 3, name: 'Care Worker Dashboard', category: 'Care Worker' },
-    { id: 'page4_patients', number: 4, name: 'Patient Management', category: 'Care Worker' },
-    { id: 'page5_add_patient', number: 5, name: 'Add Patient (Wizard)', category: 'Care Worker' },
-    { id: 'page6_patient_id', number: 6, name: 'Patient ID Generated', category: 'Care Worker' },
-    { id: 'page7_patient_profile', number: 7, name: 'Individual Patient Profile', category: 'Care Worker' },
-    { id: 'page8_alert_centre', number: 8, name: 'Alert / Notification Centre', category: 'Care Worker' },
-    { id: 'page9_patient_login', number: 9, name: 'Patient Login', category: 'Patient' },
-    { id: 'page10_patient_dashboard', number: 10, name: 'Patient Dashboard', category: 'Patient' },
-    { id: 'page11_patient_history', number: 11, name: 'Patient Dose History', category: 'Patient' },
-    { id: 'page12_reports', number: 12, name: 'Reports / Analytics', category: 'Care Worker' },
-  ];
 
   return (
     <BackgroundOverlay>
@@ -304,71 +364,23 @@ export default function App() {
         )}
       </main>
 
-      {/* Floating 12-Page Prototype Navigator Tool */}
-      <aside 
-        aria-label="Prototype 12-Page Navigator"
-        className="fixed bottom-4 right-4 z-40"
-      >
-        <div className="relative">
-          {showPageSwitcher && (
-            <div className="absolute bottom-12 right-0 w-80 glass-panel rounded-2xl p-4 shadow-2xl border border-white/90 space-y-3 mb-2 animate-in fade-in slide-in-from-bottom-2 duration-150 text-xs">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                <div className="flex items-center gap-1.5 font-bold text-slate-900">
-                  <Layers className="w-4 h-4 text-teal-600" />
-                  <span>DoseSure 12-Page Navigator</span>
-                </div>
-                <button
-                  onClick={() => setShowPageSwitcher(false)}
-                  className="text-slate-400 hover:text-slate-600 font-bold"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <p className="text-[11px] text-slate-500">
-                Quickly switch between all 12 requested views:
-              </p>
-
-              <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
-                {pageDirectory.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setActivePage(item.id);
-                      setShowPageSwitcher(false);
-                    }}
-                    className={`w-full text-left px-2.5 py-1.5 rounded-lg flex items-center justify-between transition-colors ${
-                      activePage === item.id
-                        ? 'bg-teal-600 text-white font-bold'
-                        : 'hover:bg-teal-50 text-slate-700'
-                    }`}
-                  >
-                    <span className="truncate">
-                      <strong>P{item.number}:</strong> {item.name}
-                    </span>
-                    <span className={`text-[10px] uppercase font-semibold px-1.5 py-0.2 rounded ${
-                      activePage === item.id
-                        ? 'bg-teal-700 text-white'
-                        : 'bg-slate-100 text-slate-500'
-                    }`}>
-                      {item.category}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
+      {/* Return to Initial Page Floating Button */}
+      {activePage !== 'page1_landing' && (
+        <aside 
+          aria-label="Return to Initial Page"
+          className="fixed bottom-5 right-5 z-40"
+        >
           <button
-            onClick={() => setShowPageSwitcher(!showPageSwitcher)}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-slate-900/90 hover:bg-slate-900 text-white text-xs font-bold shadow-xl border border-white/20 backdrop-blur-md transition-all hover:scale-105"
+            id="return-to-initial-page-btn"
+            onClick={() => setActivePage('page1_landing')}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-slate-900/90 hover:bg-teal-700 active:scale-95 text-white text-xs font-bold shadow-xl border border-white/20 backdrop-blur-md transition-all hover:scale-105 cursor-pointer group"
+            title="Return to Initial Page / Role Selection"
           >
-            <Layers className="w-4 h-4 text-teal-400" />
-            <span>Switch Page ({pageDirectory.find(p => p.id === activePage)?.number || 1}/12)</span>
-            {showPageSwitcher ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+            <Home className="w-4 h-4 text-teal-400 group-hover:text-white transition-colors" />
+            <span>Initial Page</span>
           </button>
-        </div>
-      </aside>
+        </aside>
+      )}
     </BackgroundOverlay>
   );
 }

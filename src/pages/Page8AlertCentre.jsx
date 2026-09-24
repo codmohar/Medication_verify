@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Alert, Patient, ActivePage } from '../types';
 import { AlertCard } from '../components/AlertCard';
 import { 
   Bell, 
@@ -13,22 +12,14 @@ import {
 } from 'lucide-react';
 import { generateWhatsAppMessage } from '../utils/helpers';
 
-interface Page8AlertCentreProps {
-  alerts: Alert[];
-  patients: Patient[];
-  onNavigate: (page: ActivePage) => void;
-  onSelectPatientById: (patientId: string) => void;
-  onToggleReviewAlert: (alertId: string) => void;
-}
-
-export const Page8AlertCentre: React.FC<Page8AlertCentreProps> = ({
+export const Page8AlertCentre = ({
   alerts,
   patients,
   onNavigate,
   onSelectPatientById,
   onToggleReviewAlert,
 }) => {
-  const [filterType, setFilterType] = useState<'ALL' | 'UNREVIEWED' | 'HIGH' | 'MISSED' | 'DEVICE'>('UNREVIEWED');
+  const [filterType, setFilterType] = useState('UNREVIEWED');
   const [searchQuery, setSearchQuery] = useState('');
 
   const unreviewedCount = alerts.filter((a) => !a.isReviewed).length;
@@ -100,7 +91,7 @@ export const Page8AlertCentre: React.FC<Page8AlertCentreProps> = ({
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setFilterType(tab.id as any)}
+              onClick={() => setFilterType(tab.id)}
               className={`px-3 py-1.5 rounded-xl font-bold transition-all whitespace-nowrap flex items-center gap-1.5 ${
                 filterType === tab.id
                   ? 'bg-teal-600 text-white shadow-xs'

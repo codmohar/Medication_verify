@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pill, ShieldCheck, Bell, LogOut, Menu, X, User } from 'lucide-react';
+import { Pill, ShieldCheck, Bell, LogOut, Menu, X, User, Home } from 'lucide-react';
 import { CareWorker, Patient, ActivePage } from '../types';
 
 interface NavbarProps {
@@ -7,9 +7,11 @@ interface NavbarProps {
   onNavigate: (page: ActivePage) => void;
   careWorker?: CareWorker;
   activePatient?: Patient | null;
+  patientUser?: Patient | null;
   unreadAlertCount?: number;
-  mobileMenuOpen: boolean;
-  onToggleMobileMenu: () => void;
+  unreviewedAlertsCount?: number;
+  mobileMenuOpen?: boolean;
+  onToggleMobileMenu?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -18,9 +20,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   careWorker,
   activePatient,
   unreadAlertCount = 0,
-  mobileMenuOpen,
-  onToggleMobileMenu,
+  mobileMenuOpen = false,
+  onToggleMobileMenu = () => {},
+  ...props
 }) => {
+  const patient = activePatient || (props as any).patientUser;
+  const alertCount = unreadAlertCount || (props as any).unreviewedAlertsCount || 0;
   const isCareWorkerArea = [
     'page3_cw_dashboard',
     'page4_patients',
@@ -68,20 +73,32 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Right side controls */}
-        <div className="flex items-center gap-3 sm:gap-4">
-          
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Direct "Initial Page" button available anywhere outside landing */}
+          {activePage !== 'page1_landing' && (
+            <button
+              id="navbar-initial-page-btn"
+              onClick={() => onNavigate('page1_landing')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 hover:text-teal-700 bg-white/80 hover:bg-white border border-slate-200/80 shadow-xs transition-all cursor-pointer group"
+              title="Return to Initial Page / Role Selection"
+            >
+              <Home className="w-3.5 h-3.5 text-teal-600 group-hover:scale-110 transition-transform" />
+              <span>Initial Page</span>
+            </button>
+          )}
+
           {/* Care Worker Context Header Info */}
           {isCareWorkerArea && careWorker && (
-            <div className="hidden md:flex items-center gap-3 pl-4 border-l border-slate-200/80">
+            <div className="hidden md:flex items-center gap-3 pl-3 border-l border-slate-200/80">
               <button
                 onClick={() => onNavigate('page8_alert_centre')}
                 className="relative p-2 rounded-xl text-slate-600 hover:text-teal-600 hover:bg-white/70 transition-colors"
                 title="Alert Centre"
               >
                 <Bell className="w-5 h-5" />
-                {unreadAlertCount > 0 && (
+                {alertCount > 0 && (
                   <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center animate-pulse">
-                    {unreadAlertCount}
+                    {alertCount}
                   </span>
                 )}
               </button>
@@ -102,7 +119,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <button
                 onClick={() => onNavigate('page1_landing')}
                 className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50/80 rounded-xl transition-colors"
-                title="Logout"
+                title="Logout to Initial Page"
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -110,15 +127,16 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
 
           {/* Patient Context Header Info */}
-          {isPatientArea && activePatient && (
+          {isPatientArea && patient && (
             <div className="flex items-center gap-3">
               <div className="glass-panel px-3 py-1 rounded-xl text-left hidden sm:block">
                 <div className="text-[11px] text-slate-500">Patient Mode</div>
-                <div className="text-xs font-bold text-slate-900">{activePatient.fullName} ({activePatient.id})</div>
+                <div className="text-xs font-bold text-slate-900">{patient.fullName} ({patient.id})</div>
               </div>
               <button
                 onClick={() => onNavigate('page1_landing')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium text-slate-600 hover:text-rose-700 hover:bg-rose-50 glass-panel transition-all"
+                title="Exit to Initial Page"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 <span>Exit</span>
